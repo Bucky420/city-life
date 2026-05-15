@@ -280,34 +280,22 @@ hook.Add("HUDPaint", "CityNPCs_LookTexHUD", function()
     end
 
     if string.find(lookTex, "**", 1, true) then
-        local ent = tr.Entity
-        if not IsValid(ent) then
-            local fallback = ply:GetEyeTrace()
-            if fallback and IsValid(fallback.Entity) then
-                ent = fallback.Entity
-            end
-        end
-        local cls = IsValid(ent) and ent:GetClass() or "none"
-        local model = IsValid(ent) and (ent:GetModel() or "none") or "none"
-        draw.SimpleTextOutlined("Hit class: " .. cls, "CityNPCs_NavHUD_Small", ScrW() / 2, 46, Color(230, 200, 160), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 2, Color(0, 0, 0, 220))
-        draw.SimpleTextOutlined("Hit model: " .. model, "CityNPCs_NavHUD_Small", ScrW() / 2, 66, Color(230, 200, 160), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 2, Color(0, 0, 0, 220))
-
-        if not IsValid(ent) then
+        if not IsValid(tr.Entity) then
             local staticModel, dist, candidates = findNearestStaticPropModel(tr.HitPos, tr.StartPos, tr.Normal, 220)
             local st = CityNPCs.StaticPropDebug
-            draw.SimpleTextOutlined("Static cache: " .. tostring(#(st.props or {})) .. " props", "CityNPCs_NavHUD_Small", ScrW() / 2, 86, Color(180, 220, 255), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 2, Color(0, 0, 0, 220))
+            draw.SimpleTextOutlined("Static cache: " .. tostring(#(st.props or {})) .. " props", "CityNPCs_NavHUD_Small", ScrW() / 2, 46, Color(180, 220, 255), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 2, Color(0, 0, 0, 220))
             if staticModel then
-                draw.SimpleTextOutlined("Static model: " .. staticModel, "CityNPCs_NavHUD_Small", ScrW() / 2, 106, Color(180, 230, 180), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 2, Color(0, 0, 0, 220))
-                draw.SimpleTextOutlined(string.format("Static dist: %.1f", dist), "CityNPCs_NavHUD_Small", ScrW() / 2, 126, Color(180, 230, 180), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 2, Color(0, 0, 0, 220))
+                draw.SimpleTextOutlined("Static model: " .. staticModel, "CityNPCs_NavHUD_Small", ScrW() / 2, 66, Color(180, 230, 180), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 2, Color(0, 0, 0, 220))
+                draw.SimpleTextOutlined(string.format("Static dist: %.1f", dist), "CityNPCs_NavHUD_Small", ScrW() / 2, 86, Color(180, 230, 180), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 2, Color(0, 0, 0, 220))
                 if candidates and candidates[2] then
-                    draw.SimpleTextOutlined("Alt 1: " .. candidates[2].model, "CityNPCs_NavHUD_Small", ScrW() / 2, 146, Color(170, 210, 170), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 2, Color(0, 0, 0, 220))
+                    draw.SimpleTextOutlined("Alt 1: " .. candidates[2].model, "CityNPCs_NavHUD_Small", ScrW() / 2, 106, Color(170, 210, 170), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 2, Color(0, 0, 0, 220))
                 end
                 if candidates and candidates[3] then
-                    draw.SimpleTextOutlined("Alt 2: " .. candidates[3].model, "CityNPCs_NavHUD_Small", ScrW() / 2, 166, Color(170, 210, 170), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 2, Color(0, 0, 0, 220))
+                    draw.SimpleTextOutlined("Alt 2: " .. candidates[3].model, "CityNPCs_NavHUD_Small", ScrW() / 2, 126, Color(170, 210, 170), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 2, Color(0, 0, 0, 220))
                 end
             else
                 local msg = st.lastError and ("Static error: " .. st.lastError) or "Static model: not found"
-                draw.SimpleTextOutlined(msg, "CityNPCs_NavHUD_Small", ScrW() / 2, 106, Color(230, 180, 180), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 2, Color(0, 0, 0, 220))
+                draw.SimpleTextOutlined(msg, "CityNPCs_NavHUD_Small", ScrW() / 2, 66, Color(230, 180, 180), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP, 2, Color(0, 0, 0, 220))
             end
         end
     end

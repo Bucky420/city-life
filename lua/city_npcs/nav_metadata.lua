@@ -236,12 +236,12 @@ function CityNPCs.GetTexAtPos(pos, area)
 end
 
 function CityNPCs.ClassifyTexture(tex)
-    local order = {"road", "sidewalk", "crosswalk", "path", "grass", "building", "indoors"}
+    local order = {"road", "sidewalk", "crosswalk", "indoors", "path", "grass", "building"}
     return CityNPCs.ClassifyByKeywords(tex, CityNPCs.TextureKeywords, order)
 end
 
 function CityNPCs.ClassifyModel(model)
-    local order = {"road", "sidewalk", "crosswalk", "path", "grass", "building", "indoors"}
+    local order = {"road", "sidewalk", "crosswalk", "indoors", "path", "grass", "building"}
     return CityNPCs.ClassifyByKeywords(model, CityNPCs.ModelKeywords, order)
 end
 
@@ -520,21 +520,22 @@ if SERVER then
         for _, area in ipairs(areas) do
             local center = area:GetCenter()
             local tex = CityNPCs.GetTexAtPos(center, area)
-            local navType
-            if CityNPCs.IsAreaIndoors(area) then
-                navType = "indoors"
-            else
-                navType = CityNPCs.ClassifyTexture(tex)
-                if string.find(string.lower(tex or ""), "**studio**", 1, true) then
-                    local staticModel = CityNPCs.GetNearestStaticPropModel(center, 260)
-                    if staticModel then
-                        local fromModel = CityNPCs.ClassifyModel(staticModel)
-                        if fromModel ~= "other" then
-                            navType = fromModel
-                        end
+            local navType = CityNPCs.ClassifyTexture(tex)
+            if string.find(string.lower(tex or ""), "**studio**", 1, true) then
+                local staticModel = CityNPCs.GetNearestStaticPropModel(center, 260)
+                if staticModel then
+                    local fromModel = CityNPCs.ClassifyModel(staticModel)
+                    if fromModel ~= "other" then
+                        navType = fromModel
                     end
                 end
             end
+
+            local isOutdoorPriority = (navType == "road" or navType == "sidewalk" or navType == "path" or navType == "grass")
+            if not isOutdoorPriority and CityNPCs.IsAreaIndoors(area) then
+                navType = "indoors"
+            end
+
             local overrideType = CityNPCs.GetAreaOverrideType(area)
             if overrideType then
                 navType = overrideType

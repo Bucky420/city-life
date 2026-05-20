@@ -15,7 +15,6 @@ local FOLLOW_RUN_DIST = 450
 local FOLLOW_LOST_DIST = 3000
 
 function ENT:Initialize()
-    self:SetIK(true)
     self:SetModel("models/Humans/Group03/male_01.mdl")
     if SERVER then
         self:PhysicsInit(SOLID_BBOX)
@@ -53,7 +52,6 @@ function ENT:BodyUpdate()
 
     local isIdle = vel < 5
     self:SetNWBool("PlantFeet", isIdle)
-
     if vel > 120 then
         if act ~= ACT_RUN then
             self:StartActivity(ACT_RUN)
@@ -62,8 +60,10 @@ function ENT:BodyUpdate()
     elseif isIdle then
         if act ~= ACT_IDLE then
             self:StartActivity(ACT_IDLE)
+           
         end
-        self:SetCycle((self:GetCycle() + FrameTime() * 0.3) % 1)
+        --self:SetCycle((self:GetCycle() + FrameTime() * 0.3) % 1)
+          self:BodyMoveXY()
     elseif act == ACT_RUN and vel < 60 then
         self:StartActivity(ACT_WALK)
         self:BodyMoveXY()
@@ -130,7 +130,7 @@ function ENT:RunBehaviour()
                 end
             end
 
-            self.loco:SetDesiredSpeed(0)
+            self.loco:SetDesiredSpeed(1)
             coroutine.wait(1)
         else
             self.Commander = nil
@@ -141,61 +141,152 @@ end
 
 if CLIENT then
     local FOOT_NAMES = { "ValveBiped.Bip01_L_Foot", "ValveBiped.Bip01_R_Foot" }
+    local CALF_NAMES = { "ValveBiped.Bip01_L_Calf", "ValveBiped.Bip01_R_Calf" }
 
     function ENT:Draw()
         if not self._FootIds then
             self._FootIds = {}
+            self._FootNames = {}
             for _, name in ipairs(FOOT_NAMES) do
-                self._FootIds[#self._FootIds + 1] = self:LookupBone(name)
+                local id = self:LookupBone(name)
+                self._FootIds[#self._FootIds + 1] = id
+                if id then self._FootNames[id] = name end
+            end
+            self._CalfIds = {}
+            for _, name in ipairs(CALF_NAMES) do
+                local id = self:LookupBone(name)
+                self._CalfIds[#self._CalfIds + 1] = id
             end
             self._WasMoving = true
         end
 
-        if not self._BindPose then
-            self._BindPose = {}
-            self:SetupBones()
-            for _, id in ipairs(self._FootIds) do
-                if id then
-                    local m = self:GetBoneMatrix(id)
-                    if m then self._BindPose[id] = self:WorldToLocal(m:GetTranslation()) end
-                end
-            end
+        for _, id in ipairs(self._FootIds) do
+            if id then self:ManipulateBonePosition(id, Vector(0, 0, 0)) end
+        end
+        for _, id in ipairs(self._CalfIds) do
+            if id then self:ManipulateBonePosition(id, Vector(0, 0, 0)) end
         end
 
-        if self:GetNWBool("PlantFeet") then
+        local plant = self:GetNWBool("PlantFeet")
+
+        if not self._DFC then self._DFC = 0 end
+        self._DFC = self._DFC + 1
+
+        if plant then
             if self._WasMoving then
                 self._WasMoving = false
-                self._FootDz = nil
             end
 
             self:SetupBones()
 
-            local targetZ = self:GetPos().z
-            self._FootDz = self._FootDz or {}
+            local entPos = self:GetPos()
+            local entRight = self:GetAngles():Right()
 
-            for _, id in ipairs(self._FootIds) do
+            for i, id in ipairs(self._CalfIds) do
                 if not id then continue end
-                local m = self:GetBoneMatrix(id)
-                if not m then continue end
-                local bonePos = m:GetTranslation()
-                local targetDz = math.Clamp(targetZ - bonePos.z, -12, 12)
-                local curDz = self._FootDz[id] or 0
-                local delta = targetDz - curDz
-                local step = math.Clamp(delta, -FrameTime() * 200, FrameTime() * 200)
-                local newDz = curDz + step
-                self._FootDz[id] = newDz
-                self:ManipulateBonePosition(id, Vector(0, 0, newDz))
+
+                local calfMat = self:GetBoneMatrix(id)
+                if not calfMat then continue end
+                local calfPos = calfMat:GetTranslation()
+
+                local parentId = self:GetBoneParent(id)
+                if not parentId or parentId < 0 then continue end
+                local parentMat = self:GetBoneMatrix(parentId)
+                if not parentMat then continue end
+
+                local sign = (i == 1) and -1 or 1
+                local targetPos = entPos + entRight * sign * 3
+                targetPos.z = calfPos.z
+
+                local wdx = targetPos.x - calfPos.x
+                local wdy = targetPos.y - calfPos.y
+                local wdz = 0
+
+                local step = FrameTime() * 100
+                local len = math.sqrt(wdx*wdx + wdy*wdy)
+                if len > step and len > 0 then
+                    wdx = wdx / len * step
+                    wdy = wdy / len * step
+                end
+
+                local pR, pF, pU = parentMat:GetRight(), parentMat:GetForward(), parentMat:GetUp()
+                local lx = wdx * pR.x + wdy * pR.y + wdz * pR.z
+                local ly = wdx * pF.x + wdy * pF.y + wdz * pF.z
+                local lz = wdx * pU.x + wdy * pU.y + wdz * pU.z
+
+                self:ManipulateBonePosition(id, Vector(lx, ly, lz))
             end
+
+            for i, id in ipairs(self._FootIds) do
+                if not id then continue end
+
+                local footMat = self:GetBoneMatrix(id)
+                if not footMat then continue end
+                local footPos = footMat:GetTranslation()
+
+                local parentId = self:GetBoneParent(id)
+                if not parentId or parentId < 0 then continue end
+                local parentMat = self:GetBoneMatrix(parentId)
+                if not parentMat then continue end
+
+                local sign = (i == 1) and -1 or 1
+                local targetPos = entPos + entRight * sign * 6
+                targetPos.z = footPos.z
+
+                local wdx = targetPos.x - footPos.x
+                local wdy = targetPos.y - footPos.y
+                local wdz = 0
+
+                local step = FrameTime() * 100
+                local len = math.sqrt(wdx*wdx + wdy*wdy)
+                if len > step and len > 0 then
+                    wdx = wdx / len * step
+                    wdy = wdy / len * step
+                end
+
+                local pR, pF, pU = parentMat:GetRight(), parentMat:GetForward(), parentMat:GetUp()
+                local lx = wdx * pR.x + wdy * pR.y + wdz * pR.z
+                local ly = wdx * pF.x + wdy * pF.y + wdz * pF.z
+                local lz = wdx * pU.x + wdy * pU.y + wdz * pU.z
+
+                self:ManipulateBonePosition(id, Vector(lx, ly, lz))
+            end
+
+            if self._DFC % 30 == 0 then
+                local entPos = self:GetPos()
+                local fwd = self:GetAngles():Forward()
+                local right = self:GetAngles():Right()
+                local s = "[FOOT]"
+                for _, id in ipairs(self._FootIds) do
+                    if id then
+                        local m = self:GetBoneMatrix(id)
+                        if m then
+                            local rel = m:GetTranslation() - entPos
+                            local f = rel:Dot(fwd)
+                            local r = rel:Dot(right)
+                            s = s .. string.format(" f%.1f r%.1f", f, r)
+                        end
+                    end
+                end
+                s = s .. "  calves:"
+                for _, id in ipairs(self._CalfIds) do
+                    if id then
+                        local m = self:GetBoneMatrix(id)
+                        if m then
+                            local rel = m:GetTranslation() - entPos
+                            local f = rel:Dot(fwd)
+                            local r = rel:Dot(right)
+                            s = s .. string.format(" f%.1f r%.1f", f, r)
+                        end
+                    end
+                end
+                print(s)
+            end
+
         elseif not self._WasMoving then
             self._WasMoving = true
-            self._FootDz = nil
-            for _, id in ipairs(self._FootIds) do
-                if id then self:ManipulateBonePosition(id, Vector(0, 0, 0)) end
-            end
         end
 
         self:DrawModel()
     end
-
-    language.Add("city_anim_test_npc", "HL2 Citizen NPC")
 end

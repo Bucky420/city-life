@@ -203,6 +203,7 @@ function ENT:Think()
 	local dt = FrameTime() or 0.0167
 	local svPos = self:GetPos()
 	self._SmoothZ = self._SmoothZ or svPos.z
+	self._ServerZ = svPos.z
 
 	self:SetPos(Vector(svPos.x, svPos.y, self._SmoothZ))
 	self:SetupBones()
@@ -211,6 +212,23 @@ function ENT:Think()
 		{ name = "ValveBiped.Bip01_L_Foot", tag = "L" },
 		{ name = "ValveBiped.Bip01_R_Foot", tag = "R" },
 	}
+
+	local pos = self:GetPos()
+
+	local groundTr = util.TraceLine({
+		start = pos + Vector(0, 0, 4),
+		endpos = pos - Vector(0, 0, 128),
+		filter = self,
+		mask = MASK_SOLID
+	})
+	local groundZ
+	if groundTr.Hit then
+		groundZ = groundTr.HitPos.z
+	elseif groundTr.StartSolid then
+		groundZ = pos.z
+	else
+		groundZ = pos.z - 128
+	end
 
 	local footsAbove = 0
 	local totalGap = 0
@@ -221,23 +239,20 @@ function ENT:Think()
 		if id then
 			local fpos = self:GetBonePosition(id)
 			if fpos then
-				local traceStart = Vector(fpos.x, fpos.y, fpos.z + 4)
 				local tr = util.TraceLine({
-					start = traceStart,
+					start = fpos + Vector(0, 0, 4),
 					endpos = fpos - Vector(0, 0, 16),
 					filter = self,
-					mask = MASK_NPCSOLID
+					mask = MASK_SOLID
 				})
 				local gap
 				if tr.Hit then
 					gap = math.max(0, fpos.z - tr.HitPos.z)
-				elseif tr.StartSolid then
-					gap = 0
 				else
 					gap = 20
 				end
 				table.insert(dbgParts, string.format("%s:%.1f", fb.tag, gap))
-				if gap > 2 then
+				if gap > 5 then
 					footsAbove = footsAbove + 1
 					totalGap = totalGap + gap
 				end
@@ -246,22 +261,33 @@ function ENT:Think()
 	end
 	self._DbgFootGaps = table.concat(dbgParts, " ")
 
+	if CurTime() - (self._DbgNextThink or 0) > 0.5 then
+		self._DbgNextThink = CurTime()
+		Msg(string.format("[FT] ft:%s gz:%.1f sz:%.1f sv:%.1f\n",
+			self._DbgFootGaps, groundZ, self._SmoothZ, svPos.z))
+	end
+
 	local vel = self:GetNWFloat("DebugVel", 0)
 
 	if vel < 5 and footsAbove >= 1 then
+		self._Corrected = true
 		local avgGap = totalGap / footsAbove
-		local excess = avgGap - 3
+		local excess = avgGap - 5
 		if excess > 0 then
 			self._SmoothZ = self._SmoothZ - excess * dt * 12
 		end
-		self._Corrected = true
 	elseif vel >= 5 then
 		self._Corrected = false
 		local diff = svPos.z - self._SmoothZ
 		self._SmoothZ = self._SmoothZ + diff * math.min(dt * 8, 1)
 	end
 
-	self:SetPos(Vector(svPos.x, svPos.y, self._SmoothZ))
+	if self._SmoothZ > groundZ then
+		self:SetPos(Vector(svPos.x, svPos.y, self._SmoothZ))
+	else
+		self:SetPos(Vector(svPos.x, svPos.y, groundZ))
+		self._SmoothZ = groundZ
+	end
 end
 
 hook.Add("HUDPaint", "CityNPCFinalDebug", function()

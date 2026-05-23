@@ -1,8 +1,26 @@
 include("city_npcs/nav_metadata.lua")
- 
+
 list.Set("NPC", "city_npc", {
     Name = "City NPC",
     Class = "city_npc",
+    Category = "Citizens"
+})
+
+list.Set("NPC", "city_anim_test_npc", {
+    Name = "HL2 Citizen NPC",
+    Class = "city_anim_test_npc",
+    Category = "Citizens"
+})
+
+list.Set("NPC", "city_anim_test02_npc", {
+    Name = "HL2 Citizen NPC (IK Test)",
+    Class = "city_anim_test02_npc",
+    Category = "Citizens"
+})
+
+list.Set("NPC", "city_anim_final_npc_test3", {
+    Name = "Final Anim Test NPC v3",
+    Class = "city_anim_final_npc_test3",
     Category = "Citizens"
 })
 
@@ -137,10 +155,55 @@ if SERVER then
         print(msg)
     end)
 
-    print("[CityNPCs] Server loaded - commands: citynpc_spawn [n], citynpc_cleanup, citynpc_tag_nav")
+    concommand.Remove("citynpc_dump_pose")
+    concommand.Add("citynpc_dump_pose", function(ply)
+        local target = ply:GetEyeTrace().Entity
+        local cls = IsValid(target) and target:GetClass() or ""
+        local allowedClasses = { ["city_npc"] = true, ["city_anim_test_npc"] = true, ["city_anim_test02_npc"] = true, ["city_anim_final_npc_test3"] = true }
+        if not allowedClasses[cls] then
+            if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "[CityNPCs] Look at a city_npc / city_anim_test_npc / city_anim_test02_npc") end
+            return
+        end
+        local n = target:GetNumPoseParameters()
+        if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "--- Pose Params (" .. n .. ") ---") end
+        for i = 0, n - 1 do
+            local name = target:GetPoseParameterName(i)
+            local minV, maxV = target:GetPoseParameterRange(i)
+            local cur = target:GetPoseParameter(i)
+            if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, i .. ": " .. name .. " range=[" .. minV .. "," .. maxV .. "] cur=" .. cur) end
+        end
+        if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "--- End ---") end
+    end)
+
+    concommand.Remove("citynpc_dump_anims")
+    concommand.Add("citynpc_dump_anims", function(ply)
+        local target = ply:GetEyeTrace().Entity
+        local cls = IsValid(target) and target:GetClass() or ""
+        local allowedClasses = { ["city_npc"] = true, ["city_anim_test_npc"] = true, ["city_anim_test02_npc"] = true, ["city_anim_final_npc_test3"] = true }
+        if not allowedClasses[cls] then
+            if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "[CityNPCs] Look at a city_npc / city_anim_test_npc / city_anim_test02_npc") end
+            return
+        end
+        local count = target:GetSequenceCount()
+        if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "--- Sequences (" .. count .. ") ---") end
+        local actMap = {}
+        for i = 0, count - 1 do
+            local name = target:GetSequenceName(i)
+            local act = target:GetSequenceActivity(i)
+            if not actMap[act] then actMap[act] = {} end
+            table.insert(actMap[act], name)
+        end
+        for act, seqs in pairs(actMap) do
+            if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, act .. " -> " .. table.concat(seqs, ", ")) end
+        end
+        if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "--- End ---") end
+    end)
+
+    print("[CityNPCs] Server loaded - commands: citynpc_spawn [n], citynpc_cleanup")
 end
 
 if CLIENT then
     include("city_npcs/cl_ui.lua")
+    include("city_npcs/cl_anim_viewer.lua")
     print("[CityNPCs] Client loaded")
 end

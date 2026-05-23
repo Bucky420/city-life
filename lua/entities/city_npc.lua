@@ -11,11 +11,8 @@ ENT.Instructions = "Spawn and they will walk on sidewalks"
 
 
 function ENT:Initialize()
-   
-        self:SetModel("models/Humans/Group03/male_01.mdl")
+    self:SetModel("models/Humans/Group03/male_01.mdl")
     if SERVER then
-
-
         self:PhysicsInit(SOLID_BBOX)
         self:SetMoveType(MOVETYPE_STEP)
         self:SetSolid(SOLID_BBOX)
@@ -27,30 +24,40 @@ function ENT:Initialize()
         self.loco:SetAcceleration(400)
         self.loco:SetDeceleration(400)
         self.loco:SetStepHeight(18)
-        self.loco:SetMaxYawRate(360)
-        self:StartActivity(ACT_IDLE)
+        self.loco:SetMaxYawRate(180)
+    end
+end
+
+function ENT:OnContact(ent)
+    if SERVER and ent:IsPlayer() then
+        self.BlockedBy = ent
     end
 end
 
 function ENT:BodyUpdate()
     if not SERVER then return end
+    local vel = self.loco:GetVelocity():Length2D()
+    local act = self:GetActivity()
 
-    local curPos = self:GetPos()
-    local delta = curPos - (self._LastBodyPos or curPos)
-    self._LastBodyPos = curPos
-    local speed = delta:Length2D() / (FrameTime() or 0.016)
-
-    if speed > 5 then
-        if self:GetActivity() ~= ACT_WALK then
-            self:StartActivity(ACT_WALK)
+    if vel > 120 then 
+        if act ~= ACT_RUN then
+            self:StartActivity(ACT_RUN)
         end
-    else
-        if self:GetActivity() ~= ACT_IDLE then
+        self:BodyMoveXY()
+    elseif vel < 5 then
+        if act ~= ACT_IDLE then
             self:StartActivity(ACT_IDLE)
         end
+        self:FrameAdvance()
+    elseif act == ACT_RUN and vel < 60 then
+        self:StartActivity(ACT_WALK)
+        self:BodyMoveXY()
+    elseif act == ACT_IDLE then
+        self:StartActivity(ACT_WALK)
+        self:BodyMoveXY()
+    else
+        self:BodyMoveXY()
     end
-
-    self:BodyMoveXY()
 end
 
 function ENT:OnRemove()
@@ -66,49 +73,73 @@ end
 
 function ENT:RunBehaviour()
     while self:IsValid() and self:Health() > 0 do
-        local players = ents.FindInSphere(self:GetPos(), 50)
-        local blocked = false
-
-        for _, p in ipairs(players) do
-            if p:IsPlayer() then
-                local dot = self:GetForward():Dot((p:GetPos() - self:GetPos()):GetNormalized())
-                if dot > 0.7 then
-                    blocked = true
-                    break
+        local blockPlayer = self.BlockedBy
+        self.BlockedBy = nil
+        if not (blockPlayer and blockPlayer:IsValid()) then
+            blockPlayer = nil
+            for _, p in ipairs(ents.FindInSphere(self:GetPos(), 80)) do
+                if p:IsPlayer() then
+                    local toPlayer = (p:GetPos() - self:GetPos()):GetNormalized()
+                    if self:GetForward():Dot(toPlayer) > -0.3 then
+                        blockPlayer = p
+                        break
+                    end
                 end
             end
         end
 
-        if blocked then
-            self.loco:SetDesiredSpeed(30)
-            self:MoveToPos(self:GetPos() - self:GetForward() * 30, {
-                tolerance = 10,
-                maxage = 1
+        if blockPlayer then
+            local savedFwd = self:GetForward()
+            local startPos = self:GetPos()
+            local tr = util.TraceHull({
+                start = startPos,
+                endpos = startPos - savedFwd * 500,
+                mins = self:OBBMins(),
+                maxs = self:OBBMaxs(),
+                filter = { self, blockPlayer },
+                mask = MASK_SOLID
             })
-            coroutine.wait(0.2)
+            local maxDist = math.max(40, math.min(tr.Fraction * 500 - 40, 180))
+            self.loco:SetDesiredSpeed(200)
+            while (self:GetPos() - startPos):Length() < maxDist do
+                self.loco:FaceTowards(self:GetPos() + savedFwd * 200)
+                self.loco:Approach(self:GetPos() - savedFwd * 100, 1)
+                coroutine.yield()
+            end
+            self.loco:SetDesiredSpeed(60)
             continue
         end
 
         local dest = CityNPCs.FindDestination(self)
         if not dest then
+            self:StartActivity(ACT_IDLE)
             coroutine.wait(1)
             continue
         end
 
         local path = CityNPCs.BuildPath(self, self:GetPos(), dest)
         if path then
+            local toDest = (dest - self:GetPos()):GetNormalized()
+            if self:GetForward():Dot(toDest) < 0.95 then
+                self.loco:FaceTowards(dest)
+                while self:GetForward():Dot(toDest) < 0.95 do
+                    self.loco:FaceTowards(dest)
+                    coroutine.yield()
+                end
+            end
+            self:StartActivity(ACT_WALK)
             self.loco:SetDesiredSpeed(60)
             self:MoveToPos(dest, {
                 path = path,
-                look_ahead = 200,
+                look_ahead = 300,
                 tolerance = 30,
-                maxage = 10,
+                maxage = 5,
                 draw = false
             })
         end
 
-        self.loco:SetDesiredSpeed(0)
-        coroutine.wait(math.random(2, 5))
+        self:StartActivity(ACT_IDLE)
+        coroutine.wait(math.random(1, 2))
     end
 end
 

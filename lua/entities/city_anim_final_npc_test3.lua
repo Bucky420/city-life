@@ -15,14 +15,6 @@ local FOLLOW_RUN_DIST = 450
 local FOLLOW_LOST_DIST = 3000
 local BACKUP_DIST = 60
 
-local ACTIVITY_NAMES = {
-	[ACT_IDLE] = "ACT_IDLE",
-	[ACT_WALK] = "ACT_WALK",
-	[ACT_RUN] = "ACT_RUN",
-	[ACT_TURN_LEFT] = "ACT_TURN_LEFT",
-	[ACT_TURN_RIGHT] = "ACT_TURN_RIGHT",
-}
-
 if SERVER then
 
 function ENT:Initialize()
@@ -74,12 +66,16 @@ function ENT:BodyUpdate()
 	end
 
 	self:BodyMoveXY()
+
+	self:SetNWFloat("DebugServerZ", self:GetPos().z)
 	self:SetNWFloat("DebugVel", vel)
 	self:SetNWInt("DebugActID", newAct)
 	self:SetNWString("DebugSeq", self:GetSequenceName(self:GetSequence()) or "")
 	self:SetNWFloat("DebugCycle", self:GetCycle())
 	self:SetNWFloat("DebugRate", self:GetPlaybackRate())
 end
+
+
 
 function ENT:AddTurnGesture(yawDeltaDeg)
 	if CurTime() < self.NextTurnTime then return end
@@ -203,6 +199,71 @@ local FOOT_BONES = {
 	{ name = "ValveBiped.Bip01_R_Foot", label = "R" },
 }
 
+function ENT:Think()
+	local dt = FrameTime() or 0.0167
+	local svPos = self:GetPos()
+	self._SmoothZ = self._SmoothZ or svPos.z
+
+	self:SetPos(Vector(svPos.x, svPos.y, self._SmoothZ))
+	self:SetupBones()
+
+	local footBones = {
+		{ name = "ValveBiped.Bip01_L_Foot", tag = "L" },
+		{ name = "ValveBiped.Bip01_R_Foot", tag = "R" },
+	}
+
+	local footsAbove = 0
+	local totalGap = 0
+	local dbgParts = {}
+
+	for _, fb in ipairs(footBones) do
+		local id = self:LookupBone(fb.name)
+		if id then
+			local fpos = self:GetBonePosition(id)
+			if fpos then
+				local traceStart = Vector(fpos.x, fpos.y, fpos.z + 4)
+				local tr = util.TraceLine({
+					start = traceStart,
+					endpos = fpos - Vector(0, 0, 16),
+					filter = self,
+					mask = MASK_NPCSOLID
+				})
+				local gap
+				if tr.Hit then
+					gap = math.max(0, fpos.z - tr.HitPos.z)
+				elseif tr.StartSolid then
+					gap = 0
+				else
+					gap = 20
+				end
+				table.insert(dbgParts, string.format("%s:%.1f", fb.tag, gap))
+				if gap > 2 then
+					footsAbove = footsAbove + 1
+					totalGap = totalGap + gap
+				end
+			end
+		end
+	end
+	self._DbgFootGaps = table.concat(dbgParts, " ")
+
+	local vel = self:GetNWFloat("DebugVel", 0)
+
+	if vel < 5 and footsAbove >= 1 then
+		local avgGap = totalGap / footsAbove
+		local excess = avgGap - 3
+		if excess > 0 then
+			self._SmoothZ = self._SmoothZ - excess * dt * 12
+		end
+		self._Corrected = true
+	elseif vel >= 5 then
+		self._Corrected = false
+		local diff = svPos.z - self._SmoothZ
+		self._SmoothZ = self._SmoothZ + diff * math.min(dt * 8, 1)
+	end
+
+	self:SetPos(Vector(svPos.x, svPos.y, self._SmoothZ))
+end
+
 hook.Add("HUDPaint", "CityNPCFinalDebug", function()
 	for _, ent in ipairs(ents.FindByClass("city_anim_final_npc_test3")) do
 		local origin = ent:GetPos() + Vector(0, 0, 96)
@@ -256,9 +317,14 @@ hook.Add("HUDPaint", "CityNPCFinalDebug", function()
 		surface.SetTextPos(screen.x - w2 / 2, screen.y - 44)
 		surface.DrawText(line2)
 
+		local smoothZ = ent._SmoothZ or 0
+		local zLine = string.format("ft:%s sz:%.1f sv:%.1f", ent._DbgFootGaps or "?", smoothZ, pos.z)
 		local line3 = string.format("mx:%.2f my:%.2f ms:%.2f%s", moveX, moveY, moveScale, footStr)
 		local w3 = surface.GetTextSize(line3)
-		surface.SetTextPos(screen.x - w3 / 2, screen.y - 28)
+		local wz = surface.GetTextSize(zLine)
+		surface.SetTextPos(screen.x - math.max(w3, wz) / 2, screen.y - 28)
+		surface.DrawText(zLine)
+		surface.SetTextPos(screen.x - w3 / 2, screen.y - 12)
 		surface.DrawText(line3)
 	end
 end)

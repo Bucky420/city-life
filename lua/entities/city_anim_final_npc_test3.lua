@@ -328,6 +328,10 @@ function ENT:Think()
 		self._SmoothZ = self._SmoothZ + diff * math.min(dt * 4, 1)
 	end
 
+	local maxBelow = 16
+	if svPos.z - self._SmoothZ > maxBelow then
+		self._SmoothZ = svPos.z - maxBelow
+	end
 	self:SetPos(Vector(svPos.x, svPos.y, self._SmoothZ))
 end
 

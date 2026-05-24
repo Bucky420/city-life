@@ -265,13 +265,16 @@ function ENT:Think()
 					table.insert(dbgParts, string.format("fl:%.1f", bestFloorZ))
 				end
 				self._FootHov = self._FootHov or {}
+				self._PrevFootPos = self._PrevFootPos or {}
 				local tiltOK = fwdZ > -0.85
 				local centerG = centerGap or 20
 				local minEdge = math.min(heelGap or 20, toeGap or 20)
 				local edgeGrounded = minEdge < 3 and tiltOK
-				if edgeGrounded then
+				local prevZ = self._PrevFootPos[id]
+				self._PrevFootPos[id] = fpos.z
+				local descending = prevZ and (fpos.z - prevZ) < -0.5
+				if edgeGrounded or descending then
 					self._FootHov[id] = nil
-				else
 					local prevHov = self._FootHov[id]
 					local thresh = prevHov and 4 or 6
 					local isHov = tiltOK and centerG > thresh

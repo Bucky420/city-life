@@ -285,7 +285,7 @@ function ENT:Think()
 	end
 	self._DbgFootGaps = table.concat(dbgParts, " ")
 	local footSpan = footMaxZ - footMinZ
-	local bothHovering = footsAbove >= 1 and footSpan < 6
+	local bothHovering = footsAbove >= 1 and footSpan < 8
 
 	if CurTime() - (self._DbgNextThink or 0) > 0.5 then
 		self._DbgNextThink = CurTime()

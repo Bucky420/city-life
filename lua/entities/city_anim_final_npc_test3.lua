@@ -281,7 +281,7 @@ function ENT:Think()
 				else
 					local prevHov = self._FootHov[id]
 					local tiltAdj = math.max(0, -fwdZ * 3)
-					local thresh = prevHov and 4 or (6 + tiltAdj)
+					local thresh = prevHov and 4.5 or (6 + tiltAdj)
 					local isHov = tiltOK and centerG > thresh
 					if isHov then
 						self._FootHov[id] = true

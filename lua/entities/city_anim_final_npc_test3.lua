@@ -240,37 +240,35 @@ function ENT:Think()
 						mask = MASK_SOLID
 					})
 					if tr.Hit then
-						return math.max(0, origin.z - tr.HitPos.z), tr.HitPos.z
+						if tr.HitNormal and tr.HitNormal.z > 0.7 then
+							return math.max(0, origin.z - tr.HitPos.z), tr.HitPos.z
+						end
 					elseif tr.StartSolid then
-						return 0, nil
-					else
-						return 20, nil
+						return 0, origin.z
 					end
+					return nil, nil
 				end
 
 				local centerGap, centerFloor = doTrace(fpos)
-				local heelGap = doTrace(fpos + fwd * -4)
-				local toeGap = doTrace(fpos + fwd * 4)
+				local heelGap, heelFloor = doTrace(fpos + fwd * -4)
+				local toeGap, toeFloor = doTrace(fpos + fwd * 4)
 
 				local sampleGaps = { heelGap, centerGap, toeGap }
+				local gaps = {}
+				if centerGap then table.insert(gaps, { gap = centerGap, floor = centerFloor }) end
+				if heelGap then table.insert(gaps, { gap = heelGap, floor = heelFloor }) end
+				if toeGap then table.insert(gaps, { gap = toeGap, floor = toeFloor }) end
 				local gap, bestFloorZ
-				if centerGap < 6 then
-					gap = centerGap
-					bestFloorZ = centerFloor
-				elseif centerGap > 12 then
-					local minEdge = math.min(heelGap, toeGap)
-					if minEdge < 6 then
-						gap = minEdge
-					else
-						gap = centerGap
-						bestFloorZ = centerFloor
-					end
+				if #gaps > 0 then
+					table.sort(gaps, function(a, b) return a.gap < b.gap end)
+					gap = gaps[1].gap
+					bestFloorZ = gaps[1].floor
 				else
-					gap = centerGap
-					bestFloorZ = centerFloor
+					gap = 20
 				end
 
-			local gapStr = string.format("%.1f/%.1f/%.1f", sampleGaps[1], sampleGaps[2], sampleGaps[3])
+			local function fmtG(v) return v and string.format("%.1f", v) or "-" end
+			local gapStr = fmtG(sampleGaps[1]) .. "/" .. fmtG(sampleGaps[2]) .. "/" .. fmtG(sampleGaps[3])
 				table.insert(dbgParts, string.format("%s:%s f:%.2f r:%.2f u:%.2f",
 					fb.label, gapStr, fwdZ, rgtZ, upZ))
 				if bestFloorZ then
@@ -290,7 +288,7 @@ function ENT:Think()
 	end
 	self._DbgFootGaps = table.concat(dbgParts, " ")
 	local footSpan = footMaxZ - footMinZ
-	local bothHovering = footsAbove >= 1 and footSpan < 6
+	local bothHovering = footsAbove >= 1 and footSpan < 10
 
 	if CurTime() - (self._DbgNextThink or 0) > 0.5 then
 		self._DbgNextThink = CurTime()

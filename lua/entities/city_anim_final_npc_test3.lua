@@ -274,14 +274,21 @@ function ENT:Think()
 				if bestFloorZ then
 					table.insert(dbgParts, string.format("fl:%.1f", bestFloorZ))
 				end
+				self._FootHov = self._FootHov or {}
 				local tiltOK = fwdZ > -0.85
-				if gap > 6 and tiltOK then
+				local prevHov = self._FootHov[id]
+				local thresh = prevHov and 4 or 5.5
+				local isHov = tiltOK and gap > thresh
+				if isHov then
+					self._FootHov[id] = true
 					footsAbove = footsAbove + 1
 					totalGap = totalGap + gap
 					if bestFloorZ then
 						floorSum = floorSum + bestFloorZ
 						floorCount = floorCount + 1
 					end
+				else
+					self._FootHov[id] = nil
 				end
 			end
 		end
@@ -300,23 +307,18 @@ function ENT:Think()
 	local legHalf = 16
 
 	if bothHovering then
-		self._Corrected = true
-		self._HystCount = 0
+		self._CorrUntil = CurTime() + 0.5
 		local avgGap = totalGap / footsAbove
 		local desired = 4
 		local excess = avgGap - desired
 		if excess > 0 then
 			self._SmoothZ = math.max(self._SmoothZ - excess * dt * 15, svPos.z - legHalf)
 		end
-	elseif self._Corrected then
-		self._HystCount = (self._HystCount or 0) + 1
-		if self._HystCount > 5 then
-			self._Corrected = false
-			self._HystCount = 0
-		end
+	elseif self._CorrUntil and CurTime() < self._CorrUntil then
 	else
+		self._CorrUntil = nil
 		local diff = svPos.z - self._SmoothZ
-		self._SmoothZ = self._SmoothZ + diff * math.min(dt * 8, 1)
+		self._SmoothZ = self._SmoothZ + diff * math.min(dt * 4, 1)
 	end
 
 	self:SetPos(Vector(svPos.x, svPos.y, self._SmoothZ))

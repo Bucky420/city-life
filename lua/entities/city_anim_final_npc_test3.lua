@@ -213,7 +213,6 @@ function ENT:Think()
 	local floorSum, floorCount = 0, 0
 	local footMinZ, footMaxZ = math.huge, -math.huge
 	local dbgParts = {}
-	self._DbgUp = nil
 
 	for _, fb in ipairs(FOOT_BONES) do
 		local id = self:LookupBone(fb.name)
@@ -269,10 +268,8 @@ function ENT:Think()
 				local tiltOK = fwdZ > -0.85
 				local centerG = centerGap or 20
 				local minEdge = math.min(heelGap or 20, toeGap or 20)
-				local stepEdge = centerG > 6 and tiltOK and minEdge < 3
-				if stepEdge then
-					self._DbgUp = "UP"
-					self._SmoothZ = self._SmoothZ + (3 - minEdge) * dt * 6
+				local edgeGrounded = minEdge < 3 and tiltOK
+				if edgeGrounded then
 					self._FootHov[id] = nil
 				else
 					local prevHov = self._FootHov[id]
@@ -299,9 +296,9 @@ function ENT:Think()
 
 	if CurTime() - (self._DbgNextThink or 0) > 0.5 then
 		self._DbgNextThink = CurTime()
-		Msg(string.format("[FT] %s ft:%s span:%.1f sv:%.1f sz:%.1f %s %s\n",
+		Msg(string.format("[FT] %s ft:%s span:%.1f sv:%.1f sz:%.1f %s\n",
 			actName, self._DbgFootGaps, footSpan, svPos.z, self._SmoothZ,
-			bothHovering and "HOVER" or "", self._DbgUp or ""))
+			bothHovering and "HOVER" or ""))
 	end
 
 	local legHalf = 16

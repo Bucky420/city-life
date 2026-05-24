@@ -272,9 +272,10 @@ function ENT:Think()
 				local edgeGrounded = minEdge < 3 and tiltOK
 				local prevZ = self._PrevFootPos[id]
 				self._PrevFootPos[id] = fpos.z
-				local descending = prevZ and (fpos.z - prevZ) < -0.5
+				local descending = prevZ and (fpos.z - prevZ) < -2
 				if edgeGrounded or descending then
 					self._FootHov[id] = nil
+				else
 					local prevHov = self._FootHov[id]
 					local thresh = prevHov and 4 or 6
 					local isHov = tiltOK and centerG > thresh

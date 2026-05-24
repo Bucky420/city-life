@@ -269,7 +269,7 @@ function ENT:Think()
 				local tiltOK = fwdZ > -0.85
 				local centerG = centerGap or 20
 				local minEdge = math.min(heelGap or 20, toeGap or 20)
-				local edgeGrounded = minEdge < 3 and tiltOK
+				local edgeGrounded = minEdge < 3 and tiltOK and centerG > 10
 				if edgeGrounded and centerG > 6 then
 					self._SmoothZ = self._SmoothZ + (3 - minEdge) * dt * 12
 				end

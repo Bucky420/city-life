@@ -270,6 +270,9 @@ function ENT:Think()
 				local centerG = centerGap or 20
 				local minEdge = math.min(heelGap or 20, toeGap or 20)
 				local edgeGrounded = minEdge < 3 and tiltOK
+				if edgeGrounded and centerG > 6 then
+					self._SmoothZ = self._SmoothZ + (3 - minEdge) * dt * 12
+				end
 				local prevZ = self._PrevFootPos[id]
 				self._PrevFootPos[id] = fpos.z
 				local descending = prevZ and (fpos.z - prevZ) < -2
@@ -277,7 +280,8 @@ function ENT:Think()
 					self._FootHov[id] = nil
 				else
 					local prevHov = self._FootHov[id]
-					local thresh = prevHov and 4 or 6
+					local tiltAdj = math.max(0, -fwdZ * 3)
+					local thresh = prevHov and 4 or (6 + tiltAdj)
 					local isHov = tiltOK and centerG > thresh
 					if isHov then
 						self._FootHov[id] = true

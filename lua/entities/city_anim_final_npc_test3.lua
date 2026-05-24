@@ -254,18 +254,8 @@ function ENT:Think()
 				local toeGap, toeFloor = doTrace(fpos + fwd * 4)
 
 				local sampleGaps = { heelGap, centerGap, toeGap }
-				local gaps = {}
-				if centerGap then table.insert(gaps, { gap = centerGap, floor = centerFloor }) end
-				if heelGap then table.insert(gaps, { gap = heelGap, floor = heelFloor }) end
-				if toeGap then table.insert(gaps, { gap = toeGap, floor = toeFloor }) end
-				local gap, bestFloorZ
-				if #gaps > 0 then
-					table.sort(gaps, function(a, b) return a.gap < b.gap end)
-					gap = gaps[1].gap
-					bestFloorZ = gaps[1].floor
-				else
-					gap = 20
-				end
+				local gap = centerGap or 20
+				local bestFloorZ = centerFloor
 
 			local function fmtG(v) return v and string.format("%.1f", v) or "-" end
 			local gapStr = fmtG(sampleGaps[1]) .. "/" .. fmtG(sampleGaps[2]) .. "/" .. fmtG(sampleGaps[3])
@@ -277,7 +267,7 @@ function ENT:Think()
 				self._FootHov = self._FootHov or {}
 				local tiltOK = fwdZ > -0.85
 				local prevHov = self._FootHov[id]
-				local thresh = prevHov and 4 or 5.5
+				local thresh = prevHov and 4 or 6
 				local isHov = tiltOK and gap > thresh
 				if isHov then
 					self._FootHov[id] = true
@@ -295,7 +285,7 @@ function ENT:Think()
 	end
 	self._DbgFootGaps = table.concat(dbgParts, " ")
 	local footSpan = footMaxZ - footMinZ
-	local bothHovering = footsAbove >= 1 and footSpan < 10
+	local bothHovering = footsAbove >= 1 and footSpan < 6
 
 	if CurTime() - (self._DbgNextThink or 0) > 0.5 then
 		self._DbgNextThink = CurTime()

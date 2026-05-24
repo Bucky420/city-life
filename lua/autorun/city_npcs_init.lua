@@ -7,20 +7,26 @@ list.Set("NPC", "city_npc", {
 })
 
 list.Set("NPC", "city_anim_test_npc", {
-    Name = "HL2 Citizen NPC",
+    Name = "Test v1",
     Class = "city_anim_test_npc",
     Category = "Citizens"
 })
 
 list.Set("NPC", "city_anim_test02_npc", {
-    Name = "HL2 Citizen NPC (IK Test)",
+    Name = "Test v2 (IK test)",
     Class = "city_anim_test02_npc",
     Category = "Citizens"
 })
 
 list.Set("NPC", "city_anim_final_npc_test3", {
-    Name = "Final Anim Test NPC v3",
+    Name = "Test v3 (npc Anim)",
     Class = "city_anim_final_npc_test3",
+    Category = "Citizens"
+})
+
+list.Set("NPC", "city_anim_test04_player", {
+    Name = "Test v4 (player Anim)",
+    Class = "city_anim_test04_player",
     Category = "Citizens"
 })
 
@@ -159,12 +165,12 @@ if SERVER then
     concommand.Add("citynpc_dump_pose", function(ply)
         local target = ply:GetEyeTrace().Entity
         local cls = IsValid(target) and target:GetClass() or ""
-        local allowedClasses = { ["city_npc"] = true, ["city_anim_test_npc"] = true, ["city_anim_test02_npc"] = true, ["city_anim_final_npc_test3"] = true }
-        if not allowedClasses[cls] then
-            if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "[CityNPCs] Look at a city_npc / city_anim_test_npc / city_anim_test02_npc") end
-            return
-        end
-        local n = target:GetNumPoseParameters()
+local allowedClasses = { ["city_npc"] = true, ["city_anim_test_npc"] = true, ["city_anim_test02_npc"] = true, ["city_anim_final_npc_test3"] = true, ["city_anim_test04_player"] = true }
+            if not allowedClasses[cls] then
+                if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "[CityNPCs] Look at a city_npc / city_anim_test_npc / city_anim_test02_npc / city_anim_test04_player") end
+                return
+            end
+            local n = target:GetNumPoseParameters()
         if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "--- Pose Params (" .. n .. ") ---") end
         for i = 0, n - 1 do
             local name = target:GetPoseParameterName(i)
@@ -179,9 +185,9 @@ if SERVER then
     concommand.Add("citynpc_dump_anims", function(ply)
         local target = ply:GetEyeTrace().Entity
         local cls = IsValid(target) and target:GetClass() or ""
-        local allowedClasses = { ["city_npc"] = true, ["city_anim_test_npc"] = true, ["city_anim_test02_npc"] = true, ["city_anim_final_npc_test3"] = true }
+        local allowedClasses = { ["city_npc"] = true, ["city_anim_test_npc"] = true, ["city_anim_test02_npc"] = true, ["city_anim_final_npc_test3"] = true, ["city_anim_test04_player"] = true }
         if not allowedClasses[cls] then
-            if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "[CityNPCs] Look at a city_npc / city_anim_test_npc / city_anim_test02_npc") end
+            if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "[CityNPCs] Look at a city_npc / city_anim_test_npc / city_anim_test02_npc / city_anim_test04_player") end
             return
         end
         local count = target:GetSequenceCount()

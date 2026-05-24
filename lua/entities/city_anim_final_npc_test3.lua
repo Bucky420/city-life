@@ -203,160 +203,125 @@ function ENT:Think()
 	local dt = FrameTime() or 0.0167
 	local svPos = self:GetPos()
 	self._SmoothZ = self._SmoothZ or svPos.z
-	self._ServerZ = svPos.z
 
 	self:SetPos(Vector(svPos.x, svPos.y, self._SmoothZ))
 	self:SetupBones()
 
-	local footBones = {
-		{ name = "ValveBiped.Bip01_L_Foot", tag = "L" },
-		{ name = "ValveBiped.Bip01_R_Foot", tag = "R" },
-	}
-
-	local pos = self:GetPos()
-
-	local groundTr = util.TraceLine({
-		start = pos + Vector(0, 0, 4),
-		endpos = pos - Vector(0, 0, 128),
-		filter = self,
-		mask = MASK_SOLID
-	})
-	local groundZ
-	if groundTr.Hit then
-		groundZ = groundTr.HitPos.z
-	elseif groundTr.StartSolid then
-		groundZ = pos.z
-	else
-		groundZ = pos.z - 128
-	end
-
+	local actName = CL_ACT_NAMES[self:GetNWInt("DebugActID", 0)] or "?"
 	local footsAbove = 0
 	local totalGap = 0
+	local floorSum, floorCount = 0, 0
+	local footMinZ, footMaxZ = math.huge, -math.huge
 	local dbgParts = {}
 
-	for _, fb in ipairs(footBones) do
+	for _, fb in ipairs(FOOT_BONES) do
 		local id = self:LookupBone(fb.name)
 		if id then
 			local fpos = self:GetBonePosition(id)
 			if fpos then
-				local tr = util.TraceLine({
-					start = fpos + Vector(0, 0, 4),
-					endpos = fpos - Vector(0, 0, 16),
-					filter = self,
-					mask = MASK_SOLID
-				})
-				local gap
-				if tr.Hit then
-					gap = math.max(0, fpos.z - tr.HitPos.z)
-				else
-					gap = 20
+				footMinZ = math.min(footMinZ, fpos.z)
+				footMaxZ = math.max(footMaxZ, fpos.z)
+
+				local fmat = self:GetBoneMatrix(id)
+				local fwdZ, rgtZ, upZ = 0, 0, 0
+				local fwd = Vector(0, 0, 0)
+				if fmat then
+					fwdZ = fmat:GetForward().z
+					rgtZ = fmat:GetRight().z
+					upZ = fmat:GetUp().z
+					fwd = fmat:GetForward()
 				end
-				table.insert(dbgParts, string.format("%s:%.1f", fb.tag, gap))
-				if gap > 5 then
+
+				local function doTrace(origin)
+					local tr = util.TraceLine({
+						start = origin + Vector(0, 0, 4),
+						endpos = origin - Vector(0, 0, 16),
+						filter = self,
+						mask = MASK_SOLID
+					})
+					if tr.Hit then
+						return math.max(0, origin.z - tr.HitPos.z), tr.HitPos.z
+					elseif tr.StartSolid then
+						return 0, nil
+					else
+						return 20, nil
+					end
+				end
+
+				local centerGap, centerFloor = doTrace(fpos)
+				local heelGap = doTrace(fpos + fwd * -4)
+				local toeGap = doTrace(fpos + fwd * 4)
+
+				local sampleGaps = { heelGap, centerGap, toeGap }
+				local gap, bestFloorZ
+				if centerGap < 6 then
+					gap = centerGap
+					bestFloorZ = centerFloor
+				elseif centerGap > 12 then
+					local minEdge = math.min(heelGap, toeGap)
+					if minEdge < 6 then
+						gap = minEdge
+					else
+						gap = centerGap
+						bestFloorZ = centerFloor
+					end
+				else
+					gap = centerGap
+					bestFloorZ = centerFloor
+				end
+
+			local gapStr = string.format("%.1f/%.1f/%.1f", sampleGaps[1], sampleGaps[2], sampleGaps[3])
+				table.insert(dbgParts, string.format("%s:%s f:%.2f r:%.2f u:%.2f",
+					fb.label, gapStr, fwdZ, rgtZ, upZ))
+				if bestFloorZ then
+					table.insert(dbgParts, string.format("fl:%.1f", bestFloorZ))
+				end
+				local tiltOK = fwdZ > -0.85
+				if gap > 6 and tiltOK then
 					footsAbove = footsAbove + 1
 					totalGap = totalGap + gap
+					if bestFloorZ then
+						floorSum = floorSum + bestFloorZ
+						floorCount = floorCount + 1
+					end
 				end
 			end
 		end
 	end
 	self._DbgFootGaps = table.concat(dbgParts, " ")
+	local footSpan = footMaxZ - footMinZ
+	local bothHovering = footsAbove >= 1 and footSpan < 6
 
 	if CurTime() - (self._DbgNextThink or 0) > 0.5 then
 		self._DbgNextThink = CurTime()
-		Msg(string.format("[FT] ft:%s gz:%.1f sz:%.1f sv:%.1f\n",
-			self._DbgFootGaps, groundZ, self._SmoothZ, svPos.z))
+		Msg(string.format("[FT] %s ft:%s span:%.1f sv:%.1f sz:%.1f %s\n",
+			actName, self._DbgFootGaps, footSpan, svPos.z, self._SmoothZ,
+			bothHovering and "HOVER" or ""))
 	end
 
-	local vel = self:GetNWFloat("DebugVel", 0)
+	local legHalf = 16
 
-	if vel < 5 and footsAbove >= 1 then
+	if bothHovering then
 		self._Corrected = true
+		self._HystCount = 0
 		local avgGap = totalGap / footsAbove
-		local excess = avgGap - 5
+		local desired = 4
+		local excess = avgGap - desired
 		if excess > 0 then
-			self._SmoothZ = self._SmoothZ - excess * dt * 12
+			self._SmoothZ = math.max(self._SmoothZ - excess * dt * 15, svPos.z - legHalf)
 		end
-	elseif vel >= 5 then
-		self._Corrected = false
+	elseif self._Corrected then
+		self._HystCount = (self._HystCount or 0) + 1
+		if self._HystCount > 5 then
+			self._Corrected = false
+			self._HystCount = 0
+		end
+	else
 		local diff = svPos.z - self._SmoothZ
 		self._SmoothZ = self._SmoothZ + diff * math.min(dt * 8, 1)
 	end
 
-	if self._SmoothZ > groundZ then
-		self:SetPos(Vector(svPos.x, svPos.y, self._SmoothZ))
-	else
-		self:SetPos(Vector(svPos.x, svPos.y, groundZ))
-		self._SmoothZ = groundZ
-	end
-end
-
-hook.Add("HUDPaint", "CityNPCFinalDebug", function()
-	for _, ent in ipairs(ents.FindByClass("city_anim_final_npc_test3")) do
-		local origin = ent:GetPos() + Vector(0, 0, 96)
-		local screen = origin:ToScreen()
-		if not screen.visible then continue end
-
-		local actID = ent:GetNWInt("DebugActID", ACT_IDLE)
-		local actName = CL_ACT_NAMES[actID] or tostring(actID)
-		local seqName = ent:GetNWString("DebugSeq", "?")
-		local cycle = ent:GetNWFloat("DebugCycle", 0)
-		local rate = ent:GetNWFloat("DebugRate", 1)
-
-		local status = ent:GetNWString("DebugStatus", "?")
-		local vel = ent:GetNWFloat("DebugVel", 0)
-		local yawDelta = ent:GetNWFloat("DebugYawDelta", 0)
-		local turnVal = ent:GetNWString("DebugTurn", "-")
-		local cmdName = ent:GetNWString("DebugCmdName", "")
-		local cmdDist = ent:GetNWFloat("DebugCmdDist", 0)
-
-		local moveX = ent:GetPoseParameter("move_x") or 0
-		local moveY = ent:GetPoseParameter("move_y") or 0
-		local moveScale = ent:GetPoseParameter("move_scale") or 0
-
-		ent:SetupBones()
-		local footStr = ""
-		for _, fb in ipairs(FOOT_BONES) do
-			local id = ent:LookupBone(fb.name)
-			if id then
-				local pos = ent:GetBonePosition(id)
-				if pos then
-					local lp = ent:WorldToLocal(pos)
-					footStr = footStr .. string.format(" %s:%.0f %.0f %.0f", fb.label, lp.x, lp.y, lp.z)
-				end
-			end
-		end
-
-		local pos = ent:GetPos()
-		local posStr = string.format("%.0f %.0f %.0f", pos.x, pos.y, pos.z)
-
-		surface.SetFont("CityNPCDbgFinal")
-		surface.SetTextColor(Color(255, 255, 100, 255))
-
-		local line1 = string.format("[%s] spd:%.1f yawΔ:%+.0f %s seq:%s cyc:%.2f rt:%.1f", actName, vel, yawDelta, turnVal, seqName, cycle, rate)
-		local w1 = surface.GetTextSize(line1)
-		surface.SetTextPos(screen.x - w1 / 2, screen.y - 60)
-		surface.DrawText(line1)
-
-		local cmdPart = cmdName ~= "" and string.format(" cmd:%s dist:%.0f", cmdName, cmdDist) or ""
-		local line2 = string.format("pos:%s  [%s]%s", posStr, status, cmdPart)
-		local w2 = surface.GetTextSize(line2)
-		surface.SetTextPos(screen.x - w2 / 2, screen.y - 44)
-		surface.DrawText(line2)
-
-		local smoothZ = ent._SmoothZ or 0
-		local zLine = string.format("ft:%s sz:%.1f sv:%.1f", ent._DbgFootGaps or "?", smoothZ, pos.z)
-		local line3 = string.format("mx:%.2f my:%.2f ms:%.2f%s", moveX, moveY, moveScale, footStr)
-		local w3 = surface.GetTextSize(line3)
-		local wz = surface.GetTextSize(zLine)
-		surface.SetTextPos(screen.x - math.max(w3, wz) / 2, screen.y - 28)
-		surface.DrawText(zLine)
-		surface.SetTextPos(screen.x - w3 / 2, screen.y - 12)
-		surface.DrawText(line3)
-	end
-end)
-
-function ENT:Draw()
-	self:DrawModel()
+	self:SetPos(Vector(svPos.x, svPos.y, self._SmoothZ))
 end
 
 end

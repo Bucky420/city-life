@@ -2,7 +2,7 @@ AddCSLuaFile()
 
 ENT.Type = "nextbot"
 ENT.Base = "base_nextbot"
-ENT.PrintName = "HL2 Citizen NPC"
+ENT.PrintName = "Test v1"
 ENT.Spawnable = true
 ENT.AdminOnly = false
 ENT.Author = "City NPCs"

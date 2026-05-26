@@ -2,101 +2,102 @@ AddCSLuaFile()
 
 ENT.Type = "nextbot"
 ENT.Base = "base_nextbot"
+
 ENT.PrintName = "Final Anim Test NPC v3"
 ENT.Spawnable = true
 ENT.AdminOnly = false
 ENT.Author = "City NPCs"
-ENT.Purpose = "Final anim test: turning, stairs, IK, motion, backup on touch"
-ENT.Instructions = "Press +USE to recruit. Follows commander, backs up when close."
+
+ENT.Purpose = "Minimal follow NPC with SetIK(true)"
+ENT.Instructions = "Press +USE to recruit. Follows commander."
 
 local FOLLOW_STOP_DIST = 75
 local FOLLOW_START_DIST = 110
 local FOLLOW_RUN_DIST = 450
-local FOLLOW_LOST_DIST = 3000
-local BACKUP_DIST = 60
+local FOLLOW_LOST_DIST  = 30000
+
+local FOLLOW_SPEED_WALK = 85
+local FOLLOW_SPEED_RUN = 150
+local FOLLOW_SPEED_IDLE = 60
+
+local TURN_GESTURE_COOLDOWN = 0.5
+local TURN_GESTURE_MIN_DELTA = 15
 
 if SERVER then
 
 function ENT:Initialize()
 	self:SetModel("models/Humans/Group03/male_01.mdl")
+
 	self:SetIK(true)
+
 	self:PhysicsInit(SOLID_BBOX)
 	self:SetMoveType(MOVETYPE_STEP)
 	self:SetSolid(SOLID_BBOX)
 	self:SetCollisionGroup(COLLISION_GROUP_NPC)
+
 	self:SetHealth(100)
 	self:SetMaxHealth(100)
+
 	self:SetUseType(SIMPLE_USE)
-	self.loco:SetAcceleration(400)
-	self.loco:SetDeceleration(400)
-	self.loco:SetStepHeight(24)
-	self.loco:SetMaxYawRate(360)
+
+	self.loco:SetDesiredSpeed(60)
+	self.loco:SetAcceleration(200)
+	self.loco:SetDeceleration(200)
+	self.loco:SetStepHeight(18)
+	self.loco:SetMaxYawRate(180)
+
+	self:StartActivity(ACT_IDLE)
+
 	self.Commander = nil
 	self.NextTurnTime = 0
-	self._PrevCmdDist = 0
-end
-
-function ENT:AcceptInput(name, activator, caller, data)
-	if SERVER and name == "Use" and IsValid(activator) and activator:IsPlayer() and activator:Alive() then
-		self.Commander = self.Commander == activator and nil or activator
-		return true
-	end
+	self._DesiredSpeed = 0
 end
 
 function ENT:BodyUpdate()
-	if not SERVER then return end
-	local vel = self.loco:GetVelocity():Length2D()
 	local act = self:GetActivity()
-	local newAct
+	local speed = self.loco:GetVelocity():Length2D()
+	local wantMove = speed > 5
 
-	if vel > 120 then
-		newAct = ACT_RUN
-	elseif vel < 5 then
-		newAct = ACT_IDLE
-	else
-		newAct = ACT_WALK
-	end
+	local newAct = wantMove and ACT_WALK or ACT_IDLE
 
-	if newAct ~= act then
-		local cyc = self:GetCycle()
+	if newAct ~= act and newAct then
+		local cycle
+		if act == ACT_IDLE and newAct == ACT_WALK then
+			cycle = self:GetCycle()
+		end
 		self:StartActivity(newAct)
-		if (act == ACT_WALK or act == ACT_RUN) and (newAct == ACT_WALK or newAct == ACT_RUN) then
-			self:SetCycle(cyc)
+		if cycle then
+			self:SetCycle(cycle)
 		end
 	end
 
 	self:BodyMoveXY()
-
-	self:SetNWFloat("DebugServerZ", self:GetPos().z)
-	self:SetNWFloat("DebugVel", vel)
-	self:SetNWInt("DebugActID", newAct)
-	self:SetNWString("DebugSeq", self:GetSequenceName(self:GetSequence()) or "")
-	self:SetNWFloat("DebugCycle", self:GetCycle())
-	self:SetNWFloat("DebugRate", self:GetPlaybackRate())
 end
 
+function ENT:AcceptInput(name, activator)
+	if name ~= "Use" then return end
+	if not IsValid(activator) or not activator:IsPlayer() or not activator:Alive() then return end
 
+	self.Commander = (self.Commander == activator) and nil or activator
+	return true
+end
 
 function ENT:AddTurnGesture(yawDeltaDeg)
 	if CurTime() < self.NextTurnTime then return end
-	self.NextTurnTime = CurTime() + 0.5
+	self.NextTurnTime = CurTime() + TURN_GESTURE_COOLDOWN
 
 	local absDelta = math.abs(yawDeltaDeg)
-	if absDelta < 15 then return end
+	if absDelta < TURN_GESTURE_MIN_DELTA then return end
 
-	local turnAct, turnName
+	local turnAct
 	if yawDeltaDeg < -45 then
 		turnAct = ACT_GESTURE_TURN_RIGHT90
-		turnName = "R90"
 	elseif yawDeltaDeg < 0 then
 		turnAct = ACT_GESTURE_TURN_RIGHT45
-		turnName = "R45"
 	elseif yawDeltaDeg <= 45 then
 		turnAct = ACT_GESTURE_TURN_LEFT45
-		turnName = "L45"
 	else
 		turnAct = ACT_GESTURE_TURN_LEFT90
-		turnName = "L90"
 	end
 
 	local seqIdx = self:SelectWeightedSequence(turnAct)
@@ -106,233 +107,155 @@ function ENT:AddTurnGesture(yawDeltaDeg)
 			self:SetLayerPriority(layerId, 100)
 		end
 	end
-
-	self:SetNWString("DebugTurn", turnName)
 end
 
 function ENT:RunBehaviour()
 	while self:IsValid() and self:Health() > 0 do
+		
 		if self.Commander and IsValid(self.Commander) and self.Commander:Alive() then
 			local cmdPos = self.Commander:GetPos()
 			local dist = self:GetPos():Distance(cmdPos)
 
-			self:SetNWString("DebugCmdName", self.Commander:Nick())
-			self:SetNWFloat("DebugCmdDist", dist)
-
 			if dist > FOLLOW_LOST_DIST then
-				self.Commander = nil
-				self:SetNWString("DebugStatus", "LOST")
 				coroutine.wait(1)
 				continue
 			end
 
 			if dist > FOLLOW_STOP_DIST then
-				local speed = dist > FOLLOW_RUN_DIST and 300 or (dist > FOLLOW_START_DIST and 100 or 60)
-				self.loco:SetDesiredSpeed(speed)
+				self._DesiredSpeed = 1
+
+				local toTarget = (cmdPos - self:GetPos()):GetNormalized()
+				self.loco:FaceTowards(cmdPos)
+				local faceStart = CurTime()
+				while self:GetForward():Dot(toTarget) < 0.95 and CurTime() - faceStart < 2 do
+					toTarget = (cmdPos - self:GetPos()):GetNormalized()
+					self.loco:FaceTowards(cmdPos) 
+					coroutine.yield()
+				end
+
+				if not self._LastMovePrint or CurTime() - self._LastMovePrint > 5 then
+					self._LastMovePrint = CurTime()
+					print(self:GetClass() .. " [" .. self:EntIndex() .. "] moving to " .. self.Commander:Nick())
+				end
+				self._DesiredSpeed = (dist > FOLLOW_RUN_DIST and FOLLOW_SPEED_RUN) or
+					(dist > FOLLOW_START_DIST and FOLLOW_SPEED_WALK) or
+					FOLLOW_SPEED_IDLE
+				self.loco:SetDesiredSpeed(self._DesiredSpeed)
+
+				local stuckPos = self:GetPos()
+				local stuckTime = 0
 
 				while self.Commander and IsValid(self.Commander) and self.Commander:Alive() do
 					cmdPos = self.Commander:GetPos()
 					dist = self:GetPos():Distance(cmdPos)
 
-					if dist > FOLLOW_LOST_DIST then self.Commander = nil; break end
-					if dist <= FOLLOW_STOP_DIST then break end
+					if dist > FOLLOW_LOST_DIST then
+						break
+					end
+					if dist <= FOLLOW_STOP_DIST then
+						break
+					end
 
-					self:SetNWString("DebugStatus", speed > 100 and "RUNNING" or "FOLLOWING")
-					self:SetNWFloat("DebugCmdDist", dist)
+					if self:GetPos():Distance(stuckPos) < 8 then
+						stuckTime = stuckTime + FrameTime()
+					else
+						stuckPos = self:GetPos()
+						stuckTime = 0
+					end
+
+					if stuckTime > 2 then
+						print(self:GetClass() .. " [" .. self:EntIndex() .. "] is stuck, retrying...")
+						break
+					end
 
 					self.loco:FaceTowards(cmdPos)
 					self.loco:Approach(cmdPos, 1)
 
 					local yawDelta = (math.deg(math.atan2(cmdPos.y - self:GetPos().y, cmdPos.x - self:GetPos().x)) - self:GetAngles().y) % 360
 					if yawDelta > 180 then yawDelta = yawDelta - 360 end
-					self:SetNWFloat("DebugYawDelta", yawDelta)
 					self:AddTurnGesture(yawDelta)
 
 					coroutine.yield()
 				end
 			else
-				local prevDist = self._PrevCmdDist
-				self._PrevCmdDist = dist
-
-				if dist < BACKUP_DIST and dist < prevDist and prevDist > 0 then
-					self:SetNWString("DebugStatus", "BACKING")
-					self.loco:SetDesiredSpeed(40)
-					self.loco:FaceTowards(cmdPos)
-					self.loco:Approach(self:GetPos() - self:GetForward() * 80, 1)
-				else
-					self:SetNWString("DebugStatus", "IDLE")
-					self.loco:SetDesiredSpeed(1)
-					coroutine.wait(0.5)
-				end
-				coroutine.yield()
+				self._DesiredSpeed = 0
+				coroutine.wait(1)
 			end
 		else
+			self._DesiredSpeed = 0
 			self.Commander = nil
-			self:SetNWString("DebugStatus", "IDLE")
-			self:SetNWString("DebugCmdName", "")
-			self:SetNWFloat("DebugCmdDist", 0)
 			coroutine.wait(1)
 		end
 	end
 end
 
-end -- SERVER
+end
 
 if CLIENT then
 
-surface.CreateFont("CityNPCDbgFinal", {
-	font = "Consolas",
-	size = 13,
-	weight = 600,
-})
-
-local CL_ACT_NAMES = {
-	[ACT_IDLE] = "ACT_IDLE",
-	[ACT_WALK] = "ACT_WALK",
-	[ACT_RUN] = "ACT_RUN",
-	[ACT_TURN_LEFT] = "ACT_TURN_LEFT",
-	[ACT_TURN_RIGHT] = "ACT_TURN_RIGHT",
-}
-
 local FOOT_BONES = {
-	{ name = "ValveBiped.Bip01_L_Foot", label = "L" },
-	{ name = "ValveBiped.Bip01_R_Foot", label = "R" },
+	"ValveBiped.Bip01_L_Foot",
+	"ValveBiped.Bip01_R_Foot",
+	"ValveBiped.Bip01_L_Ankle",
+	"ValveBiped.Bip01_R_Ankle",
 }
 
 function ENT:Think()
-	local dt = FrameTime() or 0.0167
-	local svPos = self:GetPos()
-	self._SmoothZ = self._SmoothZ or svPos.z
+	local pos = self:GetPos()
 
-	self:SetPos(Vector(svPos.x, svPos.y, self._SmoothZ))
+	if not self._RenderZ then
+		self._RenderZ = pos.z
+	end
+
+	if not self._IkOffset then
+		self._IkOffset = 0
+	end
+
+	self._RenderZ = Lerp(math.min(FrameTime() * 8, 0.25), self._RenderZ, pos.z + self._IkOffset)
+end
+
+function ENT:Draw()
+	local pos = self:GetPos()
+	self:SetPos(Vector(pos.x, pos.y, self._RenderZ))
 	self:SetupBones()
 
-	local actName = CL_ACT_NAMES[self:GetNWInt("DebugActID", 0)] or "?"
-	local footsAbove = 0
-	local totalGap = 0
-	local floorSum, floorCount = 0, 0
-	local footMinZ, footMaxZ = math.huge, -math.huge
-	local dbgParts = {}
-
-	for _, fb in ipairs(FOOT_BONES) do
-		local id = self:LookupBone(fb.name)
-		if id then
-			local fpos = self:GetBonePosition(id)
-			if fpos then
-				footMinZ = math.min(footMinZ, fpos.z)
-				footMaxZ = math.max(footMaxZ, fpos.z)
-
-				local fmat = self:GetBoneMatrix(id)
-				local fwdZ, rgtZ, upZ = 0, 0, 0
-				local fwd = Vector(0, 0, 0)
-				if fmat then
-					fwdZ = fmat:GetForward().z
-					rgtZ = fmat:GetRight().z
-					upZ = fmat:GetUp().z
-					fwd = fmat:GetForward()
-				end
-
-				local function doTrace(origin)
-					local tr = util.TraceLine({
-						start = origin + Vector(0, 0, 4),
-						endpos = origin - Vector(0, 0, 16),
-						filter = self,
-						mask = MASK_SOLID
-					})
-					if tr.Hit then
-						if tr.HitNormal and tr.HitNormal.z > 0.7 then
-							return math.max(0, origin.z - tr.HitPos.z), tr.HitPos.z
-						end
-					elseif tr.StartSolid then
-						return 0, origin.z
+	local lowestGround = math.huge
+	local highestGround = -math.huge
+	for _, name in ipairs(FOOT_BONES) do
+		local idx = self:LookupBone(name)
+		if idx and idx >= 0 then
+			local bonePos = self:GetBonePosition(idx)
+			if bonePos then
+				local t = util.TraceLine({
+					start = bonePos + Vector(0, 0, 2),
+					endpos = bonePos - Vector(0, 0, 36),
+					mask = MASK_SOLID,
+					filter = self
+				})
+				if t.Hit then
+					if t.HitPos.z < lowestGround then
+						lowestGround = t.HitPos.z
 					end
-					return nil, nil
-				end
-
-				local centerGap, centerFloor = doTrace(fpos)
-				local heelGap, heelFloor = doTrace(fpos + fwd * -4)
-				local toeGap, toeFloor = doTrace(fpos + fwd * 4)
-
-				local sampleGaps = { heelGap, centerGap, toeGap }
-				local gap = centerGap or 20
-				local bestFloorZ = centerFloor
-
-			local function fmtG(v) return v and string.format("%.1f", v) or "-" end
-			local gapStr = fmtG(sampleGaps[1]) .. "/" .. fmtG(sampleGaps[2]) .. "/" .. fmtG(sampleGaps[3])
-				table.insert(dbgParts, string.format("%s:%s f:%.2f r:%.2f u:%.2f",
-					fb.label, gapStr, fwdZ, rgtZ, upZ))
-				if bestFloorZ then
-					table.insert(dbgParts, string.format("fl:%.1f", bestFloorZ))
-				end
-				self._FootHov = self._FootHov or {}
-				self._PrevFootPos = self._PrevFootPos or {}
-				local tiltOK = fwdZ > -0.85
-				local centerG = centerGap or 20
-				local minEdge = math.min(heelGap or 20, toeGap or 20)
-				local edgeGrounded = minEdge < 3 and tiltOK and centerG > 10
-				if edgeGrounded and centerG > 6 then
-					self._SmoothZ = self._SmoothZ + (3 - minEdge) * dt * 12
-				end
-				local prevZ = self._PrevFootPos[id]
-				self._PrevFootPos[id] = fpos.z
-				local descending = prevZ and (fpos.z - prevZ) < -2
-				if edgeGrounded or descending then
-					self._FootHov[id] = nil
-				else
-					local prevHov = self._FootHov[id]
-					local tiltAdj = math.max(0, -fwdZ * 3)
-					local thresh = prevHov and 4.5 or (6 + tiltAdj)
-					local isHov = tiltOK and centerG > thresh
-					if isHov then
-						self._FootHov[id] = true
-						footsAbove = footsAbove + 1
-						totalGap = totalGap + centerG
-						if bestFloorZ then
-							floorSum = floorSum + bestFloorZ
-							floorCount = floorCount + 1
-						end
-					else
-						self._FootHov[id] = nil
+					if t.HitPos.z > highestGround then
+						highestGround = t.HitPos.z
 					end
 				end
 			end
 		end
 	end
-	self._DbgFootGaps = table.concat(dbgParts, " ")
-	local footSpan = footMaxZ - footMinZ
-	local riseVel = (svPos.z - (self._PrevSVZ or svPos.z)) / math.max(dt, 0.001)
-	self._PrevSVZ = svPos.z
-	local bothHovering = riseVel < 5 and footsAbove >= 1 and footSpan < 8
 
-	if CurTime() - (self._DbgNextThink or 0) > 0.5 then
-		self._DbgNextThink = CurTime()
-		Msg(string.format("[FT] %s ft:%s span:%.1f sv:%.1f sz:%.1f %s\n",
-			actName, self._DbgFootGaps, footSpan, svPos.z, self._SmoothZ,
-			bothHovering and "HOVER" or ""))
-	end
-
-	local legHalf = 16
-
-	if bothHovering then
-		self._CorrUntil = CurTime() + 0.5
-		local avgGap = totalGap / footsAbove
-		local desired = 4
-		local excess = avgGap - desired
-		if excess > 0 then
-			self._SmoothZ = math.max(self._SmoothZ - excess * dt * 15, svPos.z - legHalf)
+	if lowestGround < math.huge then
+		local newOffset = math.Clamp(lowestGround - pos.z, -18, 0)
+		if self._IkOffset ~= newOffset then
+			print("IkOffset:" .. string.format("%.1f", self._IkOffset or 0) .. "->" .. string.format("%.1f", newOffset) .. " LG:" .. string.format("%.1f", lowestGround) .. " HG:" .. string.format("%.1f", highestGround) .. " posZ:" .. string.format("%.1f", pos.z) .. " renderZ:" .. string.format("%.1f", self._RenderZ))
 		end
-	elseif self._CorrUntil and CurTime() < self._CorrUntil then
+		self._IkOffset = newOffset
 	else
-		self._CorrUntil = nil
-		local diff = svPos.z - self._SmoothZ
-		self._SmoothZ = self._SmoothZ + diff * math.min(dt * 4, 1)
+		self._IkOffset = (self._IkOffset or 0) * 0.5
 	end
 
-	local maxBelow = 16
-	if svPos.z - self._SmoothZ > maxBelow then
-		self._SmoothZ = svPos.z - maxBelow
-	end
-	self:SetPos(Vector(svPos.x, svPos.y, self._SmoothZ))
+	self:DrawModel()
+	self:SetPos(pos)
 end
 
 end

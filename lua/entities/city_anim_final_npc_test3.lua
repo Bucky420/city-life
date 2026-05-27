@@ -200,27 +200,15 @@ local FOOT_BONES = {
 	"ValveBiped.Bip01_R_Ankle",
 }
 
-function ENT:Think()
-	local pos = self:GetPos()
-
-	if not self._RenderZ then
-		self._RenderZ = pos.z
-	end
-
-	if not self._IkOffset then
-		self._IkOffset = 0
-	end
-
-	self._RenderZ = Lerp(math.min(FrameTime() * 8, 0.25), self._RenderZ, pos.z + self._IkOffset)
-end
-
 function ENT:Draw()
 	local pos = self:GetPos()
-	self:SetPos(Vector(pos.x, pos.y, self._RenderZ))
+	self:SetPos(Vector(pos.x, pos.y, pos.z + (self._IkOffset or 0)))
 	self:SetupBones()
 
-	local lowestGround = math.huge
-	local highestGround = -math.huge
+	local minHeight = math.huge
+	local maxHeight = -math.huge
+	local footBoneZ = 0
+
 	for _, name in ipairs(FOOT_BONES) do
 		local idx = self:LookupBone(name)
 		if idx and idx >= 0 then
@@ -233,25 +221,28 @@ function ENT:Draw()
 					filter = self
 				})
 				if t.Hit then
-					if t.HitPos.z < lowestGround then
-						lowestGround = t.HitPos.z
+					if t.HitPos.z < minHeight then
+						minHeight = t.HitPos.z
+						footBoneZ = bonePos.z
 					end
-					if t.HitPos.z > highestGround then
-						highestGround = t.HitPos.z
+					if t.HitPos.z > maxHeight then
+						maxHeight = t.HitPos.z
 					end
 				end
 			end
 		end
 	end
 
-	if lowestGround < math.huge then
-		local newOffset = math.Clamp(lowestGround - pos.z, -18, 0)
-		if self._IkOffset ~= newOffset then
-			print("IkOffset:" .. string.format("%.1f", self._IkOffset or 0) .. "->" .. string.format("%.1f", newOffset) .. " LG:" .. string.format("%.1f", lowestGround) .. " HG:" .. string.format("%.1f", highestGround) .. " posZ:" .. string.format("%.1f", pos.z) .. " renderZ:" .. string.format("%.1f", self._RenderZ))
+	if minHeight < math.huge then
+		if not self._EstIkFloor then
+			self._EstIkFloor = minHeight
 		end
-		self._IkOffset = newOffset
-	else
-		self._IkOffset = (self._IkOffset or 0) * 0.5
+		self._EstIkFloor = self._EstIkFloor * 0.2 + minHeight * 0.8
+
+		local height = 18
+		local bias = math.Clamp((maxHeight - minHeight) - height, 0, height)
+		local cur = self._IkOffset or 0
+		self._IkOffset = math.Clamp(cur + (self._EstIkFloor - footBoneZ), -height + bias, 0)
 	end
 
 	self:DrawModel()

@@ -200,70 +200,63 @@ local FOOT_BONES = {
 	"ValveBiped.Bip01_R_Ankle",
 }
 
+function ENT:Think()
+end
+
 function ENT:Draw()
 	local pos = self:GetPos()
+	local dt = FrameTime()
+
 	self:SetPos(Vector(pos.x, pos.y, pos.z + (self._IkOffset or 0)))
 	self:SetupBones()
 
-	local minHeight = math.huge
-	local maxHeight = -math.huge
-	local footBoneZ = 0
-
-	for _, name in ipairs(FOOT_BONES) do
-		local idx = self:LookupBone(name)
-		if idx and idx >= 0 then
-			local bonePos = self:GetBonePosition(idx)
-			if bonePos then
-				local t = util.TraceLine({
-					start = bonePos + Vector(0, 0, 2),
-					endpos = bonePos - Vector(0, 0, 36),
-					mask = MASK_SOLID,
-					filter = self
-				})
-				if t.Hit then
-					if t.HitPos.z < minHeight then
-						minHeight = t.HitPos.z
-						footBoneZ = bonePos.z
+	if not self._FootCycles then
+		self._FootCycles = {}
+		local seq = self:GetSequence()
+		local seqName = self:GetSequenceName(seq)
+		local mdl = self:GetModel()
+		local info = util.GetModelInfo(mdl)
+		if info and info.Sequences then
+			for _, s in ipairs(info.Sequences) do
+				if s.Name == seqName and s.Events then
+					for _, ev in ipairs(s.Events) do
+						if ev.Event >= 6004 and ev.Event <= 6007 then
+							table.insert(self._FootCycles, ev.Cycle)
+						end
 					end
-					if t.HitPos.z > maxHeight then
-						maxHeight = t.HitPos.z
-					end
+					break
 				end
 			end
 		end
-	end
-
-	local bias = 0
-
-	if minHeight < math.huge then
-		if not self._EstIkFloor then
-			self._EstIkFloor = minHeight
+		if #self._FootCycles == 0 then
+			self._FootCycles = {0.29, 0.79}
 		end
-		self._EstIkFloor = self._EstIkFloor * 0.2 + minHeight * 0.8
-
-		local height = 18
-		bias = math.Clamp((maxHeight - minHeight) - height, 0, height)
-		self._IkOffset = math.Clamp(self._EstIkFloor - footBoneZ, -height + bias, 0)
 	end
+
+	local cycle = self:GetCycle()
+
+	local minDist = 0.5
+	for _, evCycle in ipairs(self._FootCycles) do
+		local d = math.abs(cycle - evCycle)
+		if d > 0.5 then d = 1.0 - d end
+		if d < minDist then
+			minDist = d
+		end
+	end
+
+	local cur = self._IkOffset or 0
+	local target = math.Clamp(-minDist * 36, -18, 0)
+	self._IkOffset = cur + (target - cur) * math.min(dt * 8, 1)
 
 	self._DbgFrame = (self._DbgFrame or 0) + 1
 	if self._DbgFrame % 10 == 0 then
-		local lFootIdx = self:LookupBone("ValveBiped.Bip01_L_Foot")
-		local rFootIdx = self:LookupBone("ValveBiped.Bip01_R_Foot")
-		local lFootPos = lFootIdx and self:GetBonePosition(lFootIdx) or nil
-		local rFootPos = rFootIdx and self:GetBonePosition(rFootIdx) or nil
-		local lFootZ = lFootPos and lFootPos.z or 0
-		local rFootZ = rFootPos and rFootPos.z or 0
-		print(string.format(
-			"off:%.1f est:%.1f min:%.1f fBZ:%.1f bias:%.1f | L:%.1f R:%.1f | posZ:%.1f cycle:%.2f",
+		print(string.format("off:%.1f dist:%.2f cycle:%.2f events:%s | posZ:%.1f seq:%s",
 			self._IkOffset or 0,
-			self._EstIkFloor or 0,
-			minHeight or 0,
-			footBoneZ or 0,
-			bias or 0,
-			lFootZ, rFootZ,
+			minDist,
+			cycle,
+			table.concat(self._FootCycles, ","),
 			pos.z,
-			self:GetCycle()
+			self:GetSequenceName(self:GetSequence())
 		))
 	end
 

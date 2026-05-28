@@ -245,7 +245,7 @@ function ENT:Draw()
 	end
 
 	local cur = self._IkOffset or 0
-	local target = math.Clamp(-minDist * 36, -18, 0)
+	local target = math.Clamp(-minDist * 8, -6, 0)
 	self._IkOffset = cur + (target - cur) * math.min(dt * 8, 1)
 
 	self._DbgFrame = (self._DbgFrame or 0) + 1

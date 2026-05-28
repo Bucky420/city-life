@@ -41,8 +41,8 @@ function ENT:Initialize()
 	self:SetUseType(SIMPLE_USE)
 
 	self.loco:SetDesiredSpeed(60)
-	self.loco:SetAcceleration(200)
-	self.loco:SetDeceleration(200)
+	self.loco:SetAcceleration(50)
+	self.loco:SetDeceleration(50)
 	self.loco:SetStepHeight(18)
 	self.loco:SetMaxYawRate(180)
 
@@ -193,73 +193,148 @@ end
 
 if CLIENT then
 
-local FOOT_BONES = {
-	"ValveBiped.Bip01_L_Foot",
-	"ValveBiped.Bip01_R_Foot",
-	"ValveBiped.Bip01_L_Ankle",
-	"ValveBiped.Bip01_R_Ankle",
-}
-
-function ENT:Think()
-end
-
 function ENT:Draw()
 	local pos = self:GetPos()
-	local dt = FrameTime()
+	local STEP_HEIGHT = 18
+	local seq = self:GetSequence()
+	local act = self:GetSequenceActivity(seq)
+	local isMoving = act == ACT_WALK or act == ACT_RUN
 
-	self:SetPos(Vector(pos.x, pos.y, pos.z + (self._IkOffset or 0)))
+	-- Step 1: SetupBones at ORIGINAL position to get true animated bone positions
 	self:SetupBones()
 
-	if not self._FootCycles then
-		self._FootCycles = {}
-		local seq = self:GetSequence()
-		local seqName = self:GetSequenceName(seq)
-		local mdl = self:GetModel()
-		local info = util.GetModelInfo(mdl)
-		if info and info.Sequences then
-			for _, s in ipairs(info.Sequences) do
-				if s.Name == seqName and s.Events then
-					for _, ev in ipairs(s.Events) do
-						if ev.Event >= 6004 and ev.Event <= 6007 then
-							table.insert(self._FootCycles, ev.Cycle)
+	local lFootBone = self:LookupBone("ValveBiped.Bip01_L_Foot")
+	local rFootBone = self:LookupBone("ValveBiped.Bip01_R_Foot")
+
+	-- Get actual bone world positions using matrix (wiki: GetBonePosition can be stale)
+	local lFootWorld = nil
+	local rFootWorld = nil
+
+	if lFootBone and lFootBone >= 0 then
+		local mat = self:GetBoneMatrix(lFootBone)
+		if mat then lFootWorld = mat:GetTranslation() end
+	end
+	if rFootBone and rFootBone >= 0 then
+		local mat = self:GetBoneMatrix(rFootBone)
+		if mat then rFootWorld = mat:GetTranslation() end
+	end
+
+	-- Step 2: Trace from each foot's ACTUAL world position (bone XY, not entity XY)
+	local r = 1
+	local groundZ = nil
+
+	local lFootLocalZ, rFootLocalZ = "?", "?"
+	local lTrDist, rTrDist = "?", "?"
+
+	if lFootWorld then
+		lFootLocalZ = string.format("%.1f", self:WorldToLocal(lFootWorld).z)
+
+		local lTr = util.TraceHull({
+			start = lFootWorld,
+			endpos = lFootWorld - Vector(0, 0, STEP_HEIGHT),
+			mins = Vector(-r, -r, 0),
+			maxs = Vector(r, r, 1),
+			filter = self,
+			mask = MASK_SOLID
+		})
+		if lTr.Hit then
+			lTrDist = string.format("%.1f", lFootWorld.z - lTr.HitPos.z)
+			if lTr.HitWorld then
+				groundZ = lTr.HitPos.z
+			end
+		else
+			lTrDist = "miss"
+		end
+	end
+
+	if rFootWorld then
+		rFootLocalZ = string.format("%.1f", self:WorldToLocal(rFootWorld).z)
+
+		local rTr = util.TraceHull({
+			start = rFootWorld,
+			endpos = rFootWorld - Vector(0, 0, STEP_HEIGHT),
+			mins = Vector(-r, -r, 0),
+			maxs = Vector(r, r, 1),
+			filter = self,
+			mask = MASK_SOLID
+		})
+		if rTr.Hit then
+			rTrDist = string.format("%.1f", rFootWorld.z - rTr.HitPos.z)
+			if rTr.HitWorld and (not groundZ or rTr.HitPos.z > groundZ) then
+				groundZ = rTr.HitPos.z
+			end
+		else
+			rTrDist = "miss"
+		end
+	end
+
+	-- Step 3: Animation foot plant weight (only when walking)
+	local footWeight = 1
+	local cycleOffset = 0
+	if isMoving then
+		if not self._FootCycles then
+			self._FootCycles = {}
+			local walkSeqName = self:GetSequenceName(seq)
+			local mdl = self:GetModel()
+			local info = util.GetModelInfo(mdl)
+			if info and info.Sequences then
+				for _, s in ipairs(info.Sequences) do
+					if s.Name == walkSeqName and s.Events then
+						for _, ev in ipairs(s.Events) do
+							if ev.Event >= 6004 and ev.Event <= 6007 then
+								table.insert(self._FootCycles, ev.Cycle)
+							end
 						end
+						break
 					end
-					break
 				end
 			end
+			if #self._FootCycles == 0 then
+				self._FootCycles = {0.29, 0.79}
+			end
 		end
-		if #self._FootCycles == 0 then
-			self._FootCycles = {0.29, 0.79}
+
+		local cycle = self:GetCycle()
+		local minDist = 0.5
+		for _, evCycle in ipairs(self._FootCycles) do
+			local d = math.abs(cycle - evCycle)
+			if d > 0.5 then d = 1.0 - d end
+			if d < minDist then
+				minDist = d
+			end
 		end
+		cycleOffset = minDist
+		footWeight = math.Clamp(1 - minDist * 2, 0, 1)
+	else
+		self._FootCycles = nil
 	end
 
-	local cycle = self:GetCycle()
-
-	local minDist = 0.5
-	for _, evCycle in ipairs(self._FootCycles) do
-		local d = math.abs(cycle - evCycle)
-		if d > 0.5 then d = 1.0 - d end
-		if d < minDist then
-			minDist = d
-		end
-	end
-
+	-- Step 4: Compute offset from lowest foot trace
 	local cur = self._IkOffset or 0
-	local target = math.Clamp(-minDist * 8, -6, 0)
-	self._IkOffset = cur + (target - cur) * math.min(dt * 8, 1)
+	if groundZ then
+		local targetOffset = math.Clamp(groundZ - pos.z, -STEP_HEIGHT, 0)
+		local blended = targetOffset * footWeight
+		self._IkOffset = cur * 0.2 + blended * 0.8
+	else
+		self._IkOffset = cur * 0.5
+	end
 
 	self._DbgFrame = (self._DbgFrame or 0) + 1
-	if self._DbgFrame % 10 == 0 then
-		print(string.format("off:%.1f dist:%.2f cycle:%.2f events:%s | posZ:%.1f seq:%s",
+	if self._DbgFrame % 10 == 0 and FrameTime() > 0 then
+		print(string.format("O: %.1f  LZ: %s D: %s  RZ: %s D: %s  C: %.2f  CO: %.2f  W: %.2f  %s",
 			self._IkOffset or 0,
-			minDist,
-			cycle,
-			table.concat(self._FootCycles, ","),
-			pos.z,
-			self:GetSequenceName(self:GetSequence())
+			lFootLocalZ, lTrDist,
+			rFootLocalZ, rTrDist,
+			self:GetCycle(),
+			cycleOffset,
+			footWeight,
+			isMoving and "WALK" or "IDLE"
 		))
 	end
 
+	-- Step 5: Apply offset and draw
+	self:SetPos(Vector(pos.x, pos.y, pos.z + (self._IkOffset or 0)))
+	self:SetupBones()
 	self:DrawModel()
 	self:SetPos(pos)
 end

@@ -326,60 +326,32 @@ function ENT:Draw()
 	end
 
 	-- Step 4: Compute offset (Source SDK UpdateStepOrigin)
-	-- SDK uses same logic for idle and moving; no special idle "higher ground" path
-
-	-- Determine which feet are planted (animation event + geometry proximity)
-	-- SDK traces against MASK_SOLID (any solid, not just world)
-	-- A foot is only "planted" if it's close to the ground (D < 8) AND the
-	-- animation event weight says it should be planted. This prevents mid-swing
-	-- traces (D=10-20+) from pulling the entity down to the wrong stair level.
-	local PLANT_THRESH = 0.5
-	local lPlanted, rPlanted
-	if isMoving then
-		lPlanted = lGroundZ and lFootWeight > PLANT_THRESH and lTrDistNum and lTrDistNum < 8
-		rPlanted = rGroundZ and rFootWeight > PLANT_THRESH and rTrDistNum and rTrDistNum < 8
-	else
-		lPlanted = lGroundZ ~= nil
-		rPlanted = rGroundZ ~= nil
+	-- Smooth weighted blend of both foot grounds by animation event weights.
+	-- No binary planted/not-planted — the weights naturally crossfade between
+	-- feet, making the offset follow the animation speed on stairs.
+	-- SDK uses MIN for the entity pre-adjustment, but without an engine-level
+	-- IK solver to handle per-foot placement, a smooth blend avoids the snap.
+	local totalWeight = 0
+	local sumZ = 0
+	if lGroundZ then
+		sumZ = sumZ + lGroundZ * lFootWeight
+		totalWeight = totalWeight + lFootWeight
+	end
+	if rGroundZ then
+		sumZ = sumZ + rGroundZ * rFootWeight
+		totalWeight = totalWeight + rFootWeight
 	end
 
-	-- SDK: m_flIKGroundMinHeight = MIN of planted foot ground heights
-	local minGround, maxGround
-	if lPlanted and rPlanted then
-		minGround = math.min(lGroundZ, rGroundZ)
-		maxGround = math.max(lGroundZ, rGroundZ)
-	elseif lPlanted then
-		minGround = lGroundZ
-		maxGround = lGroundZ
-	elseif rPlanted then
-		minGround = rGroundZ
-		maxGround = rGroundZ
-	end
+	if totalWeight > 0.01 then
+		local blendZ = sumZ / totalWeight
 
-	if minGround then
-		-- SDK: m_flEstIkFloor = old * 0.2 + m_flIKGroundMinHeight * 0.8
 		if not self._EstIkFloor then
-			self._EstIkFloor = minGround
+			self._EstIkFloor = blendZ
 		end
-		self._EstIkFloor = self._EstIkFloor * 0.2 + minGround * 0.8
+		self._EstIkFloor = self._EstIkFloor * 0.2 + blendZ * 0.8
 
-		-- SDK bias: clamp((max - min) - height, 0, height)
-		-- When feet are far apart (stairs/curbs), reduces how far entity drops
-		local bias = math.Clamp((maxGround - minGround) - STEP_HEIGHT, 0, STEP_HEIGHT)
-
-		-- SDK-style direct assignment (no extra Lerp — the debounce is the smoothing)
-		self._IkOffset = math.Clamp(self._EstIkFloor - pos.z, -STEP_HEIGHT + bias, 0)
-	elseif isMoving and lGroundZ and rGroundZ then
-		-- Mid-stride: neither foot close to ground. Use higher ground to
-		-- maintain height (don't drop to a swinging foot's deep trace).
-		local highZ = math.max(lGroundZ, rGroundZ)
-		if not self._EstIkFloor then
-			self._EstIkFloor = highZ
-		end
-		self._EstIkFloor = self._EstIkFloor * 0.2 + highZ * 0.8
 		self._IkOffset = math.Clamp(self._EstIkFloor - pos.z, -STEP_HEIGHT, 0)
 	else
-		-- No ground or idle with no valid plant: decay
 		self._IkOffset = (self._IkOffset or 0) * 0.5
 	end
 

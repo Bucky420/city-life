@@ -211,5 +211,74 @@ end
 if CLIENT then
     include("city_npcs/cl_ui.lua")
     include("city_npcs/cl_anim_viewer.lua")
+
+    local dbgEnts = {}
+    local dbgFrame = 0
+
+    concommand.Remove("citynpc_debug_entity")
+    concommand.Add("citynpc_debug_entity", function()
+        local target = LocalPlayer():GetEyeTrace().Entity
+        if not IsValid(target) then
+            print("[CityNPCs] Look at an entity first")
+            return
+        end
+        local idx = target:EntIndex()
+        if dbgEnts[idx] then
+            dbgEnts[idx] = nil
+            print("[CityNPCs] Debug OFF for " .. target:GetClass() .. " [" .. idx .. "]")
+        else
+            dbgEnts[idx] = target
+            print("[CityNPCs] Debug ON for " .. target:GetClass() .. " [" .. idx .. "]")
+        end
+    end)
+
+    hook.Add("Think", "CityNPCs_DebugEntity", function()
+        for idx, ent in pairs(dbgEnts) do
+            if not IsValid(ent) then dbgEnts[idx] = nil end
+        end
+
+        dbgFrame = dbgFrame + 1
+        if dbgFrame % 30 ~= 0 then return end
+
+        for _, ent in pairs(dbgEnts) do
+            ent:SetupBones()
+
+            local lFootBone = ent:LookupBone("ValveBiped.Bip01_L_Foot")
+            local rFootBone = ent:LookupBone("ValveBiped.Bip01_R_Foot")
+
+            local lStr, rStr = "L:?", "R:?"
+            if lFootBone and lFootBone >= 0 then
+                local mat = ent:GetBoneMatrix(lFootBone)
+                if mat then
+                    local fw = mat:GetTranslation()
+                    local lz = string.format("%.1f", ent:WorldToLocal(fw).z)
+                    local tr = util.TraceLine({start=fw, endpos=fw-Vector(0,0,48), filter=ent, mask=MASK_SOLID})
+                    local d = tr.Hit and string.format("%.1f", fw.z-tr.HitPos.z) or "miss"
+                    lStr = string.format("LZ:%s D:%s", lz, d)
+                end
+            end
+            if rFootBone and rFootBone >= 0 then
+                local mat = ent:GetBoneMatrix(rFootBone)
+                if mat then
+                    local fw = mat:GetTranslation()
+                    local rz = string.format("%.1f", ent:WorldToLocal(fw).z)
+                    local tr = util.TraceLine({start=fw, endpos=fw-Vector(0,0,48), filter=ent, mask=MASK_SOLID})
+                    local d = tr.Hit and string.format("%.1f", fw.z-tr.HitPos.z) or "miss"
+                    rStr = string.format("RZ:%s D:%s", rz, d)
+                end
+            end
+
+            local seq = ent:GetSequence()
+            local seqName = ent:GetSequenceName(seq) or "?"
+            local act = ent:GetSequenceActivity(seq) or "?"
+            local spd = ent:GetVelocity():Length2D()
+            local hp = ent:Health()
+            local cls = ent:GetClass()
+
+            print(string.format("[DBG] %s[%d] HP:%d Act:%s Seq:%s Spd:%.1f %s %s",
+                cls, ent:EntIndex(), hp, act, seqName, spd, lStr, rStr))
+        end
+    end)
+
     print("[CityNPCs] Client loaded")
 end

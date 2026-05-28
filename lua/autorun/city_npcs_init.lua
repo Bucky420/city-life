@@ -239,7 +239,7 @@ if CLIENT then
         end
 
         dbgFrame = dbgFrame + 1
-        if dbgFrame % 30 ~= 0 then return end
+		if dbgFrame % 5 ~= 0 then return end
 
         for _, ent in pairs(CityNPCs.DbgEnts) do
             ent:SetupBones()
@@ -271,13 +271,15 @@ if CLIENT then
 
             local seq = ent:GetSequence()
             local seqName = ent:GetSequenceName(seq) or "?"
-            local act = ent:GetSequenceActivity(seq) or "?"
             local spd = ent:GetVelocity():Length2D()
-            local hp = ent:Health()
             local cls = ent:GetClass()
+            local off = ent._IkOffset or 0
+            local blend = ent._DbgBlendOff or 0
+            local lw = ent._DbgLW or 1
+            local rw = ent._DbgRW or 1
 
-            print(string.format("[DBG] %s[%d] HP:%d Act:%s Seq:%s Spd:%.1f %s %s",
-                cls, ent:EntIndex(), hp, act, seqName, spd, lStr, rStr))
+            print(string.format("[DBG] %s[%d] Seq:%s Spd:%.1f %s %s Off:%.1f Bl:%.1f LW:%.2f RW:%.2f",
+                cls, ent:EntIndex(), seqName, spd, lStr, rStr, off, blend, lw, rw))
         end
     end)
 

@@ -216,7 +216,6 @@ end
 
 function ENT:Draw()
 	local pos = self:GetPos()
-	local STEP_HEIGHT = 18
 	-- Step 1: Enable IK on client (server SetIK doesn't propagate to nextbot client entity)
 	self:SetIK(true)
 
@@ -244,7 +243,6 @@ function ENT:Draw()
 	local TRACE_DIST = 48
 
 	local lGroundZ, rGroundZ = nil, nil
-	local lTrDistNum, rTrDistNum
 
 	if lFootWorld then
 		local lEnd = lFootWorld - Vector(0, 0, TRACE_DIST)
@@ -254,10 +252,9 @@ function ENT:Draw()
 			mins = Vector(-r, -r, 0),
 			maxs = Vector(r, r, 1),
 			filter = self,
-			mask = MASK_SOLID
+			mask = MASK_NPCSOLID_BRUSHONLY
 		})
 		if lTr.Hit then
-			lTrDistNum = lFootWorld.z - lTr.HitPos.z
 			lGroundZ = lTr.HitPos.z
 		end
 		-- Visualize left foot trace when debug is on (requires developer 1)
@@ -278,10 +275,9 @@ function ENT:Draw()
 			mins = Vector(-r, -r, 0),
 			maxs = Vector(r, r, 1),
 			filter = self,
-			mask = MASK_SOLID
+			mask = MASK_NPCSOLID_BRUSHONLY
 		})
 		if rTr.Hit then
-			rTrDistNum = rFootWorld.z - rTr.HitPos.z
 			rGroundZ = rTr.HitPos.z
 		end
 		-- Visualize right foot trace when debug is on
@@ -301,13 +297,13 @@ function ENT:Draw()
 		local cycle = self:GetCycle()
 
 		local ld = math.abs(cycle - self._FootEventLeft)
-		lFootWeight = math.Clamp(1 - ld * 2, 0, 1)
+		lFootWeight = ld < 0.5 and (math.cos(ld * math.pi * 2) + 1) / 2 or 0
 
 		local rd = math.abs(cycle - self._FootEventRight)
-		rFootWeight = math.Clamp(1 - rd * 2, 0, 1)
+		rFootWeight = rd < 0.5 and (math.cos(rd * math.pi * 2) + 1) / 2 or 0
 	end
 
-	-- Step 4: Weighted blend of both foot grounds, smoothed by 0.2/0.8 debounce
+	-- Step 4: Weighted blend of both foot grounds
 	local totalWeight = 0
 	local sumZ = 0
 	if lGroundZ then
@@ -322,13 +318,15 @@ function ENT:Draw()
 	if totalWeight > 0.01 then
 		local blendZ = sumZ / totalWeight
 
-		if not self._EstIkFloor then
-			self._EstIkFloor = blendZ
-		end
-		self._EstIkFloor = self._EstIkFloor * 0.8 + blendZ * 0.2
+		self._DbgBlendOff = blendZ - pos.z
+		self._DbgLW = lFootWeight
+		self._DbgRW = rFootWeight
 
-		self._IkOffset = math.Clamp(self._EstIkFloor - pos.z, -STEP_HEIGHT, 0)
+		self._IkOffset = math.Clamp(blendZ - pos.z, -36, 36)
 	else
+		self._DbgBlendOff = 0
+		self._DbgLW = 0
+		self._DbgRW = 0
 		self._IkOffset = (self._IkOffset or 0) * 0.5
 	end
 

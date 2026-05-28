@@ -200,7 +200,10 @@ function ENT:Draw()
 	local act = self:GetSequenceActivity(seq)
 	local isMoving = act == ACT_WALK or act == ACT_RUN
 
-	-- Step 1: SetupBones at ORIGINAL position to get true animated bone positions
+	-- Step 1: Enable IK on client (server SetIK doesn't propagate to nextbot client entity)
+	self:SetIK(true)
+
+	-- SetupBones at ORIGINAL position to get true animated bone positions
 	self:SetupBones()
 
 	local lFootBone = self:LookupBone("ValveBiped.Bip01_L_Foot")
@@ -357,7 +360,8 @@ function ENT:Draw()
 
 	self._DbgFrame = (self._DbgFrame or 0) + 1
 	if self._DbgFrame % 10 == 0 and FrameTime() > 0 then
-		print(string.format("O: %.1f  LZ: %s D: %s W:%.2f  RZ: %s D: %s W:%.2f  C: %.2f  F:%.1f  %s",
+		local ikOn = self:GetIK() and "IK" or "noIK"
+		print(string.format("%s O: %.1f  LZ: %s D: %s W:%.2f  RZ: %s D: %s W:%.2f  C: %.2f  F:%.1f  %s", ikOn,
 			self._IkOffset or 0,
 			lFootLocalZ, lTrDist, lFootWeight,
 			rFootLocalZ, rTrDist, rFootWeight,

@@ -228,6 +228,8 @@ function ENT:Draw()
 	local lTrDist, rTrDist = "?", "?"
 	local lGroundZ, rGroundZ = nil, nil
 
+	local lTrDistNum, rTrDistNum
+
 	if lFootWorld then
 		lFootLocalZ = string.format("%.1f", self:WorldToLocal(lFootWorld).z)
 
@@ -240,7 +242,8 @@ function ENT:Draw()
 			mask = MASK_SOLID
 		})
 		if lTr.Hit then
-			lTrDist = string.format("%.1f", lFootWorld.z - lTr.HitPos.z)
+			lTrDistNum = lFootWorld.z - lTr.HitPos.z
+			lTrDist = string.format("%.1f", lTrDistNum)
 			lGroundZ = lTr.HitPos.z
 		else
 			lTrDist = "miss"
@@ -259,7 +262,8 @@ function ENT:Draw()
 			mask = MASK_SOLID
 		})
 		if rTr.Hit then
-			rTrDist = string.format("%.1f", rFootWorld.z - rTr.HitPos.z)
+			rTrDistNum = rFootWorld.z - rTr.HitPos.z
+			rTrDist = string.format("%.1f", rTrDistNum)
 			rGroundZ = rTr.HitPos.z
 		else
 			rTrDist = "miss"
@@ -323,29 +327,31 @@ function ENT:Draw()
 
 	-- Step 4: Compute offset (Source SDK UpdateStepOrigin)
 	-- SDK uses same logic for idle and moving; no special idle "higher ground" path
-	local cur = self._IkOffset or 0
 
-	-- Determine which feet are planted
+	-- Determine which feet are planted (animation event + geometry proximity)
 	-- SDK traces against MASK_SOLID (any solid, not just world)
-	local lActive, rActive
+	-- A foot is only "planted" if it's close to the ground (D < 8) AND the
+	-- animation event weight says it should be planted. This prevents mid-swing
+	-- traces (D=10-20+) from pulling the entity down to the wrong stair level.
+	local PLANT_THRESH = 0.5
+	local lPlanted, rPlanted
 	if isMoving then
-		local PLANT_THRESH = 0.5
-		lActive = lGroundZ and lFootWeight > PLANT_THRESH
-		rActive = rGroundZ and rFootWeight > PLANT_THRESH
+		lPlanted = lGroundZ and lFootWeight > PLANT_THRESH and lTrDistNum and lTrDistNum < 8
+		rPlanted = rGroundZ and rFootWeight > PLANT_THRESH and rTrDistNum and rTrDistNum < 8
 	else
-		lActive = lGroundZ ~= nil
-		rActive = rGroundZ ~= nil
+		lPlanted = lGroundZ ~= nil
+		rPlanted = rGroundZ ~= nil
 	end
 
-	-- SDK: m_flIKGroundMinHeight = MIN of active foot ground heights
+	-- SDK: m_flIKGroundMinHeight = MIN of planted foot ground heights
 	local minGround, maxGround
-	if lActive and rActive then
+	if lPlanted and rPlanted then
 		minGround = math.min(lGroundZ, rGroundZ)
 		maxGround = math.max(lGroundZ, rGroundZ)
-	elseif lActive then
+	elseif lPlanted then
 		minGround = lGroundZ
 		maxGround = lGroundZ
-	elseif rActive then
+	elseif rPlanted then
 		minGround = rGroundZ
 		maxGround = rGroundZ
 	end
@@ -361,12 +367,20 @@ function ENT:Draw()
 		-- When feet are far apart (stairs/curbs), reduces how far entity drops
 		local bias = math.Clamp((maxGround - minGround) - STEP_HEIGHT, 0, STEP_HEIGHT)
 
-		-- SDK: offset = clamp(floor - origin.z, -height + bias, 0)
-		local targetOffset = math.Clamp(self._EstIkFloor - pos.z, -STEP_HEIGHT + bias, 0)
-		self._IkOffset = Lerp(FrameTime() * 15, cur, targetOffset)
+		-- SDK-style direct assignment (no extra Lerp — the debounce is the smoothing)
+		self._IkOffset = math.Clamp(self._EstIkFloor - pos.z, -STEP_HEIGHT + bias, 0)
+	elseif isMoving and lGroundZ and rGroundZ then
+		-- Mid-stride: neither foot close to ground. Use higher ground to
+		-- maintain height (don't drop to a swinging foot's deep trace).
+		local highZ = math.max(lGroundZ, rGroundZ)
+		if not self._EstIkFloor then
+			self._EstIkFloor = highZ
+		end
+		self._EstIkFloor = self._EstIkFloor * 0.2 + highZ * 0.8
+		self._IkOffset = math.Clamp(self._EstIkFloor - pos.z, -STEP_HEIGHT, 0)
 	else
-		-- No active foot ground found: decay (SDK: m_flEstIkOffset *= 0.5)
-		self._IkOffset = cur * 0.5
+		-- No ground or idle with no valid plant: decay
+		self._IkOffset = (self._IkOffset or 0) * 0.5
 	end
 
 	self._DbgFrame = (self._DbgFrame or 0) + 1

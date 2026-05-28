@@ -212,7 +212,8 @@ if CLIENT then
     include("city_npcs/cl_ui.lua")
     include("city_npcs/cl_anim_viewer.lua")
 
-    local dbgEnts = {}
+    CityNPCs = CityNPCs or {}
+    CityNPCs.DbgEnts = CityNPCs.DbgEnts or {}
     local dbgFrame = 0
 
     concommand.Remove("citynpc_debug_entity")
@@ -223,24 +224,24 @@ if CLIENT then
             return
         end
         local idx = target:EntIndex()
-        if dbgEnts[idx] then
-            dbgEnts[idx] = nil
+        if CityNPCs.DbgEnts[idx] then
+            CityNPCs.DbgEnts[idx] = nil
             print("[CityNPCs] Debug OFF for " .. target:GetClass() .. " [" .. idx .. "]")
         else
-            dbgEnts[idx] = target
+            CityNPCs.DbgEnts[idx] = target
             print("[CityNPCs] Debug ON for " .. target:GetClass() .. " [" .. idx .. "]")
         end
     end)
 
     hook.Add("Think", "CityNPCs_DebugEntity", function()
-        for idx, ent in pairs(dbgEnts) do
-            if not IsValid(ent) then dbgEnts[idx] = nil end
+        for idx, ent in pairs(CityNPCs.DbgEnts) do
+            if not IsValid(ent) then CityNPCs.DbgEnts[idx] = nil end
         end
 
         dbgFrame = dbgFrame + 1
         if dbgFrame % 30 ~= 0 then return end
 
-        for _, ent in pairs(dbgEnts) do
+        for _, ent in pairs(CityNPCs.DbgEnts) do
             ent:SetupBones()
 
             local lFootBone = ent:LookupBone("ValveBiped.Bip01_L_Foot")

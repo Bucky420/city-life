@@ -193,13 +193,30 @@ end
 
 if CLIENT then
 
+function ENT:FireAnimationEvent(pos, ang, event, name)
+    if event >= 6004 and event <= 6007 then
+        local seq = self:GetSequence()
+        if self._FootEventSeq ~= seq then
+            self._FootEventSeq = seq
+            self._FootEventLeft = nil
+            self._FootEventRight = nil
+        end
+        local cycle = self:GetCycle()
+        if event % 2 == 1 then
+            self._FootEventLeft = cycle
+        else
+            self._FootEventRight = cycle
+        end
+    end
+    if CityNPCs and CityNPCs.DbgEnts and CityNPCs.DbgEnts[self:EntIndex()] then
+        print(string.format("[AnimEvent] %s[%d] event=%d name=%s",
+            self:GetClass(), self:EntIndex(), event, name or "?"))
+    end
+end
+
 function ENT:Draw()
 	local pos = self:GetPos()
 	local STEP_HEIGHT = 18
-	local seq = self:GetSequence()
-	local act = self:GetSequenceActivity(seq)
-	local isMoving = act == ACT_WALK or act == ACT_RUN
-
 	-- Step 1: Enable IK on client (server SetIK doesn't propagate to nextbot client entity)
 	self:SetIK(true)
 
@@ -222,17 +239,18 @@ function ENT:Draw()
 		if mat then rFootWorld = mat:GetTranslation() end
 	end
 
-	-- Step 2: Trace from each foot's ACTUAL world position (bone XY, not entity XY)
-	local r = 1
+	-- Step 2: Trace from each foot's ACTUAL world position
+	local r = 3
 	local TRACE_DIST = 48
 
 	local lGroundZ, rGroundZ = nil, nil
 	local lTrDistNum, rTrDistNum
 
 	if lFootWorld then
+		local lEnd = lFootWorld - Vector(0, 0, TRACE_DIST)
 		local lTr = util.TraceHull({
 			start = lFootWorld,
-			endpos = lFootWorld - Vector(0, 0, TRACE_DIST),
+			endpos = lEnd,
 			mins = Vector(-r, -r, 0),
 			maxs = Vector(r, r, 1),
 			filter = self,
@@ -242,12 +260,21 @@ function ENT:Draw()
 			lTrDistNum = lFootWorld.z - lTr.HitPos.z
 			lGroundZ = lTr.HitPos.z
 		end
+		-- Visualize left foot trace when debug is on (requires developer 1)
+		if CityNPCs and CityNPCs.DbgEnts and CityNPCs.DbgEnts[self:EntIndex()] then
+			local col = lTr.Hit and Color(0, 255, 0) or Color(255, 0, 0)
+			local endPos = lTr.Hit and lTr.HitPos or lEnd
+			debugoverlay.Cross(lFootWorld, r, 0.01, col, true)
+			debugoverlay.Cross(endPos, r, 0.01, col, true)
+			debugoverlay.Line(lFootWorld, endPos, 0.01, col, true)
+		end
 	end
 
 	if rFootWorld then
+		local rEnd = rFootWorld - Vector(0, 0, TRACE_DIST)
 		local rTr = util.TraceHull({
 			start = rFootWorld,
-			endpos = rFootWorld - Vector(0, 0, TRACE_DIST),
+			endpos = rEnd,
 			mins = Vector(-r, -r, 0),
 			maxs = Vector(r, r, 1),
 			filter = self,
@@ -257,59 +284,30 @@ function ENT:Draw()
 			rTrDistNum = rFootWorld.z - rTr.HitPos.z
 			rGroundZ = rTr.HitPos.z
 		end
+		-- Visualize right foot trace when debug is on
+		if CityNPCs and CityNPCs.DbgEnts and CityNPCs.DbgEnts[self:EntIndex()] then
+			local col = rTr.Hit and Color(0, 255, 0) or Color(255, 0, 0)
+			local endPos = rTr.Hit and rTr.HitPos or rEnd
+			debugoverlay.Cross(rFootWorld, r, 0.01, col, true)
+			debugoverlay.Cross(endPos, r, 0.01, col, true)
+			debugoverlay.Line(rFootWorld, endPos, 0.01, col, true)
+		end
 	end
 
-	-- Step 3: Per-foot plant weight from animation events
+	-- Step 3: Per-foot plant weight from FireAnimationEvent
 	local lFootWeight = 1
 	local rFootWeight = 1
-	if isMoving then
-		if not self._FootCycles then
-			self._FootCycles = {}
-			local walkSeqName = self:GetSequenceName(seq)
-			local mdl = self:GetModel()
-			local info = util.GetModelInfo(mdl)
-			if info and info.Sequences then
-				for _, s in ipairs(info.Sequences) do
-					if s.Name == walkSeqName and s.Events then
-						for _, ev in ipairs(s.Events) do
-							if ev.Event >= 6004 and ev.Event <= 6007 then
-								table.insert(self._FootCycles, ev.Cycle)
-							end
-						end
-						break
-					end
-				end
-			end
-			if #self._FootCycles == 0 then
-				self._FootCycles = {0.29, 0.79}
-			end
-		end
-
+	if self._FootEventLeft and self._FootEventRight then
 		local cycle = self:GetCycle()
 
-		-- Each foot's weight from distance to its own event
-		-- Odd events = left foot, even events = right foot
-		-- Use d*2 so weight reaches 0 at the other event (distance 0.5)
-		for i, evCycle in ipairs(self._FootCycles) do
-			local d = math.abs(cycle - evCycle)
-			if d > 0.5 then d = 1.0 - d end
-			local weight = math.Clamp(1 - d * 2, 0, 1)
-			if i % 2 == 1 then
-				lFootWeight = math.min(lFootWeight, weight)
-			else
-				rFootWeight = math.min(rFootWeight, weight)
-			end
-		end
-	else
-		self._FootCycles = nil
+		local ld = math.abs(cycle - self._FootEventLeft)
+		lFootWeight = math.Clamp(1 - ld * 2, 0, 1)
+
+		local rd = math.abs(cycle - self._FootEventRight)
+		rFootWeight = math.Clamp(1 - rd * 2, 0, 1)
 	end
 
-	-- Step 4: Compute offset (Source SDK UpdateStepOrigin)
-	-- Smooth weighted blend of both foot grounds by animation event weights.
-	-- No binary planted/not-planted — the weights naturally crossfade between
-	-- feet, making the offset follow the animation speed on stairs.
-	-- SDK uses MIN for the entity pre-adjustment, but without an engine-level
-	-- IK solver to handle per-foot placement, a smooth blend avoids the snap.
+	-- Step 4: Weighted blend of both foot grounds, smoothed by 0.2/0.8 debounce
 	local totalWeight = 0
 	local sumZ = 0
 	if lGroundZ then
@@ -327,7 +325,7 @@ function ENT:Draw()
 		if not self._EstIkFloor then
 			self._EstIkFloor = blendZ
 		end
-		self._EstIkFloor = self._EstIkFloor * 0.2 + blendZ * 0.8
+		self._EstIkFloor = self._EstIkFloor * 0.8 + blendZ * 0.2
 
 		self._IkOffset = math.Clamp(self._EstIkFloor - pos.z, -STEP_HEIGHT, 0)
 	else

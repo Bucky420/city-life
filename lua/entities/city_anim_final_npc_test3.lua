@@ -225,17 +225,11 @@ function ENT:Draw()
 	-- Step 2: Trace from each foot's ACTUAL world position (bone XY, not entity XY)
 	local r = 1
 	local TRACE_DIST = 48
-	local groundZ = nil
 
-	local lFootLocalZ, rFootLocalZ = "?", "?"
-	local lTrDist, rTrDist = "?", "?"
 	local lGroundZ, rGroundZ = nil, nil
-
 	local lTrDistNum, rTrDistNum
 
 	if lFootWorld then
-		lFootLocalZ = string.format("%.1f", self:WorldToLocal(lFootWorld).z)
-
 		local lTr = util.TraceHull({
 			start = lFootWorld,
 			endpos = lFootWorld - Vector(0, 0, TRACE_DIST),
@@ -246,16 +240,11 @@ function ENT:Draw()
 		})
 		if lTr.Hit then
 			lTrDistNum = lFootWorld.z - lTr.HitPos.z
-			lTrDist = string.format("%.1f", lTrDistNum)
 			lGroundZ = lTr.HitPos.z
-		else
-			lTrDist = "miss"
 		end
 	end
 
 	if rFootWorld then
-		rFootLocalZ = string.format("%.1f", self:WorldToLocal(rFootWorld).z)
-
 		local rTr = util.TraceHull({
 			start = rFootWorld,
 			endpos = rFootWorld - Vector(0, 0, TRACE_DIST),
@@ -266,17 +255,13 @@ function ENT:Draw()
 		})
 		if rTr.Hit then
 			rTrDistNum = rFootWorld.z - rTr.HitPos.z
-			rTrDist = string.format("%.1f", rTrDistNum)
 			rGroundZ = rTr.HitPos.z
-		else
-			rTrDist = "miss"
 		end
 	end
 
 	-- Step 3: Per-foot plant weight from animation events
 	local lFootWeight = 1
 	local rFootWeight = 1
-	local cycleOffset = 0
 	if isMoving then
 		if not self._FootCycles then
 			self._FootCycles = {}
@@ -301,15 +286,6 @@ function ENT:Draw()
 		end
 
 		local cycle = self:GetCycle()
-		local minDist = 0.5
-		for _, evCycle in ipairs(self._FootCycles) do
-			local d = math.abs(cycle - evCycle)
-			if d > 0.5 then d = 1.0 - d end
-			if d < minDist then
-				minDist = d
-			end
-		end
-		cycleOffset = minDist
 
 		-- Each foot's weight from distance to its own event
 		-- Odd events = left foot, even events = right foot
@@ -358,18 +334,7 @@ function ENT:Draw()
 		self._IkOffset = (self._IkOffset or 0) * 0.5
 	end
 
-	self._DbgFrame = (self._DbgFrame or 0) + 1
-	if self._DbgFrame % 10 == 0 and FrameTime() > 0 then
-		local ikOn = self:GetIK() and "IK" or "noIK"
-		print(string.format("%s O: %.1f  LZ: %s D: %s W:%.2f  RZ: %s D: %s W:%.2f  C: %.2f  F:%.1f  %s", ikOn,
-			self._IkOffset or 0,
-			lFootLocalZ, lTrDist, lFootWeight,
-			rFootLocalZ, rTrDist, rFootWeight,
-			self:GetCycle(),
-			self._EstIkFloor or 0,
-			isMoving and "WALK" or "IDLE"
-		))
-	end
+	-- Debug via citynpc_debug_entity (external Think hook in city_npcs_init.lua)
 
 	-- Step 5: Apply offset and draw
 	self:SetPos(Vector(pos.x, pos.y, pos.z + (self._IkOffset or 0)))

@@ -41,8 +41,8 @@ function ENT:Initialize()
 	self:SetUseType(SIMPLE_USE)
 
 	self.loco:SetDesiredSpeed(60)
-	self.loco:SetAcceleration(50)
-	self.loco:SetDeceleration(50)
+	self.loco:SetAcceleration(300)
+	self.loco:SetDeceleration(300)
 	self.loco:SetStepHeight(18)
 	self.loco:SetMaxYawRate(180)
 
@@ -221,17 +221,19 @@ function ENT:Draw()
 
 	-- Step 2: Trace from each foot's ACTUAL world position (bone XY, not entity XY)
 	local r = 1
+	local TRACE_DIST = 48
 	local groundZ = nil
 
 	local lFootLocalZ, rFootLocalZ = "?", "?"
 	local lTrDist, rTrDist = "?", "?"
+	local lGroundZ, rGroundZ = nil, nil
 
 	if lFootWorld then
 		lFootLocalZ = string.format("%.1f", self:WorldToLocal(lFootWorld).z)
 
 		local lTr = util.TraceHull({
 			start = lFootWorld,
-			endpos = lFootWorld - Vector(0, 0, STEP_HEIGHT),
+			endpos = lFootWorld - Vector(0, 0, TRACE_DIST),
 			mins = Vector(-r, -r, 0),
 			maxs = Vector(r, r, 1),
 			filter = self,
@@ -239,9 +241,7 @@ function ENT:Draw()
 		})
 		if lTr.Hit then
 			lTrDist = string.format("%.1f", lFootWorld.z - lTr.HitPos.z)
-			if lTr.HitWorld then
-				groundZ = lTr.HitPos.z
-			end
+			lGroundZ = lTr.HitPos.z
 		else
 			lTrDist = "miss"
 		end
@@ -252,7 +252,7 @@ function ENT:Draw()
 
 		local rTr = util.TraceHull({
 			start = rFootWorld,
-			endpos = rFootWorld - Vector(0, 0, STEP_HEIGHT),
+			endpos = rFootWorld - Vector(0, 0, TRACE_DIST),
 			mins = Vector(-r, -r, 0),
 			maxs = Vector(r, r, 1),
 			filter = self,
@@ -260,16 +260,15 @@ function ENT:Draw()
 		})
 		if rTr.Hit then
 			rTrDist = string.format("%.1f", rFootWorld.z - rTr.HitPos.z)
-			if rTr.HitWorld and (not groundZ or rTr.HitPos.z > groundZ) then
-				groundZ = rTr.HitPos.z
-			end
+			rGroundZ = rTr.HitPos.z
 		else
 			rTrDist = "miss"
 		end
 	end
 
-	-- Step 3: Animation foot plant weight (only when walking)
-	local footWeight = 1
+	-- Step 3: Per-foot plant weight from animation events
+	local lFootWeight = 1
+	local rFootWeight = 1
 	local cycleOffset = 0
 	if isMoving then
 		if not self._FootCycles then
@@ -304,30 +303,80 @@ function ENT:Draw()
 			end
 		end
 		cycleOffset = minDist
-		footWeight = math.Clamp(1 - minDist * 2, 0, 1)
+
+		-- Each foot's weight from distance to its own event
+		-- Odd events = left foot, even events = right foot
+		-- Use d*2 so weight reaches 0 at the other event (distance 0.5)
+		for i, evCycle in ipairs(self._FootCycles) do
+			local d = math.abs(cycle - evCycle)
+			if d > 0.5 then d = 1.0 - d end
+			local weight = math.Clamp(1 - d * 2, 0, 1)
+			if i % 2 == 1 then
+				lFootWeight = math.min(lFootWeight, weight)
+			else
+				rFootWeight = math.min(rFootWeight, weight)
+			end
+		end
 	else
 		self._FootCycles = nil
 	end
 
-	-- Step 4: Compute offset from lowest foot trace
+	-- Step 4: Compute offset (Source SDK UpdateStepOrigin)
+	-- SDK uses same logic for idle and moving; no special idle "higher ground" path
 	local cur = self._IkOffset or 0
-	if groundZ then
-		local targetOffset = math.Clamp(groundZ - pos.z, -STEP_HEIGHT, 0)
-		local blended = targetOffset * footWeight
-		self._IkOffset = cur * 0.2 + blended * 0.8
+
+	-- Determine which feet are planted
+	-- SDK traces against MASK_SOLID (any solid, not just world)
+	local lActive, rActive
+	if isMoving then
+		local PLANT_THRESH = 0.5
+		lActive = lGroundZ and lFootWeight > PLANT_THRESH
+		rActive = rGroundZ and rFootWeight > PLANT_THRESH
 	else
+		lActive = lGroundZ ~= nil
+		rActive = rGroundZ ~= nil
+	end
+
+	-- SDK: m_flIKGroundMinHeight = MIN of active foot ground heights
+	local minGround, maxGround
+	if lActive and rActive then
+		minGround = math.min(lGroundZ, rGroundZ)
+		maxGround = math.max(lGroundZ, rGroundZ)
+	elseif lActive then
+		minGround = lGroundZ
+		maxGround = lGroundZ
+	elseif rActive then
+		minGround = rGroundZ
+		maxGround = rGroundZ
+	end
+
+	if minGround then
+		-- SDK: m_flEstIkFloor = old * 0.2 + m_flIKGroundMinHeight * 0.8
+		if not self._EstIkFloor then
+			self._EstIkFloor = minGround
+		end
+		self._EstIkFloor = self._EstIkFloor * 0.2 + minGround * 0.8
+
+		-- SDK bias: clamp((max - min) - height, 0, height)
+		-- When feet are far apart (stairs/curbs), reduces how far entity drops
+		local bias = math.Clamp((maxGround - minGround) - STEP_HEIGHT, 0, STEP_HEIGHT)
+
+		-- SDK: offset = clamp(floor - origin.z, -height + bias, 0)
+		local targetOffset = math.Clamp(self._EstIkFloor - pos.z, -STEP_HEIGHT + bias, 0)
+		self._IkOffset = Lerp(FrameTime() * 15, cur, targetOffset)
+	else
+		-- No active foot ground found: decay (SDK: m_flEstIkOffset *= 0.5)
 		self._IkOffset = cur * 0.5
 	end
 
 	self._DbgFrame = (self._DbgFrame or 0) + 1
 	if self._DbgFrame % 10 == 0 and FrameTime() > 0 then
-		print(string.format("O: %.1f  LZ: %s D: %s  RZ: %s D: %s  C: %.2f  CO: %.2f  W: %.2f  %s",
+		print(string.format("O: %.1f  LZ: %s D: %s W:%.2f  RZ: %s D: %s W:%.2f  C: %.2f  F:%.1f  %s",
 			self._IkOffset or 0,
-			lFootLocalZ, lTrDist,
-			rFootLocalZ, rTrDist,
+			lFootLocalZ, lTrDist, lFootWeight,
+			rFootLocalZ, rTrDist, rFootWeight,
 			self:GetCycle(),
-			cycleOffset,
-			footWeight,
+			self._EstIkFloor or 0,
 			isMoving and "WALK" or "IDLE"
 		))
 	end

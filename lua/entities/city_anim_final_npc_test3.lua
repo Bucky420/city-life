@@ -353,7 +353,9 @@ function ENT:Draw()
 
 		self._DbgBlendOff = math.Clamp(self._StepOrigin - smoothPos.z, -stepHeight + bias, 0)
 
-		-- Foot push: only during walk_all on stairs
+		-- Foot push: subtracts from the offset to push entity UP when foot plants on higher ground
+		-- Push strength = how much of the offset to cancel (0 = no push, 1 = full cancel)
+		local PUSH_STRENGTH = 0.4  -- tune this: 0 = off, 0.5 = half cancel, 1 = full cancel
 		local targetPush = 0
 		local dominantFoot = nil
 		if self._DbgBlendOff < -1 and self:GetSequenceName(self:GetSequence()) == "walk_all" then
@@ -372,8 +374,7 @@ function ENT:Draw()
 					local footName = (pastIdx % 2 == 1) and "left" or "right"
 					local footDist = footName == "left" and (self._LeftFootDist or 99) or (self._RightFootDist or 99)
 					local otherDist = footName == "left" and (self._RightFootDist or 99) or (self._LeftFootDist or 99)
-					local footHitZ = footName == "left" and self._LeftFootHitZ or self._RightFootHitZ
-					if footDist < 12 and footDist < otherDist and footHitZ and footHitZ > self._StepOrigin then
+					if footDist < 12 and footDist < otherDist then
 						self._LockedDominant = footName
 					end
 				end
@@ -381,12 +382,10 @@ function ENT:Draw()
 				-- Use locked foot during push window
 				if self._LockedDominant and past < 0.5 then
 					dominantFoot = self._LockedDominant
-					local footHitZ = dominantFoot == "left" and self._LeftFootHitZ or self._RightFootHitZ
-					local pushMax = math.Clamp((footHitZ or 0) - self._StepOrigin, 0, 4)
 					if past < 0.12 then
-						targetPush = pushMax
+						targetPush = PUSH_STRENGTH
 					elseif past < 0.5 then
-						targetPush = pushMax * (1 - (past - 0.12) / 0.38)
+						targetPush = PUSH_STRENGTH * (1 - (past - 0.12) / 0.38)
 					end
 				else
 					self._LockedDominant = nil
@@ -402,9 +401,10 @@ function ENT:Draw()
 			self._LastSequence = self:GetSequence()
 		end
 
-		self._FootPush = Lerp(0.08, self._FootPush or 0, 0)
-		self._IkOffset = self._DbgBlendOff
-		self._DominantFoot = nil
+		-- Push subtracts from offset: offset * (1 - push) makes entity higher
+		self._FootPush = Lerp(0.08, self._FootPush or 0, targetPush)
+		self._IkOffset = self._DbgBlendOff * (1 - self._FootPush)
+		self._DominantFoot = dominantFoot
 
 		self._DbgMinZ = minGroundZ
 		self._DbgMaxZ = maxGroundZ

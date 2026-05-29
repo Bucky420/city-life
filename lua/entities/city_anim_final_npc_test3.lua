@@ -332,7 +332,12 @@ function ENT:Draw()
 
 		local stepHeight = 18
 
-		self._StepOrigin = self._StepOrigin * 0.95 + minGroundZ * 0.05
+		-- Asymmetric filter: fast when ground rises (up stairs), slow when ground falls (down/flat)
+		if minGroundZ > self._StepOrigin then
+			self._StepOrigin = self._StepOrigin * 0.85 + minGroundZ * 0.15
+		else
+			self._StepOrigin = self._StepOrigin * 0.95 + minGroundZ * 0.05
+		end
 
 		local bias = math.Clamp((maxGroundZ - minGroundZ) - stepHeight, 0, stepHeight)
 
@@ -365,15 +370,15 @@ function ENT:Draw()
 				end
 
 				-- Use locked foot during push window
-				if self._LockedDominant and past < 0.45 then
+				if self._LockedDominant and past < 0.5 then
 					dominantFoot = self._LockedDominant
 					-- Push = how much higher the planted foot ground is vs step origin, capped at 4
 					local footHitZ = dominantFoot == "left" and self._LeftFootHitZ or self._RightFootHitZ
 					local pushMax = math.Clamp((footHitZ or 0) - self._StepOrigin, 0, 4)
 					if past < 0.12 then
 						targetPush = pushMax
-					elseif past < 0.45 then
-						targetPush = pushMax * (1 - (past - 0.12) / 0.33)
+					elseif past < 0.5 then
+						targetPush = pushMax * (1 - (past - 0.12) / 0.38)
 					end
 				else
 					self._LockedDominant = nil
@@ -390,7 +395,7 @@ function ENT:Draw()
 		end
 
 		self._FootPush = Lerp(0.08, self._FootPush or 0, targetPush)
-		self._IkOffset = self._DbgBlendOff + self._FootPush
+		self._IkOffset = math.min(self._DbgBlendOff + self._FootPush, 0)
 		self._DominantFoot = dominantFoot
 
 		self._DbgMinZ = minGroundZ

@@ -40,9 +40,9 @@ function ENT:Initialize()
 
 	self:SetUseType(SIMPLE_USE)
 
-	self.loco:SetDesiredSpeed(60)
-	self.loco:SetAcceleration(300)
-	self.loco:SetDeceleration(300)
+	self.loco:SetDesiredSpeed(100)
+	self.loco:SetAcceleration(200)
+	self.loco:SetDeceleration(200)
 	self.loco:SetStepHeight(32)
 	self.loco:SetMaxYawRate(180)
 
@@ -256,7 +256,6 @@ function ENT:Draw()
 	local minGroundZ = nil
 	local maxGroundZ = nil
 
-	-- Offset trace origin forward from ankle to foot center (~4 units)
 	local fwd = self:GetForward()
 	local footForward = Vector(fwd.x, fwd.y, 0):GetNormalized() * 4
 

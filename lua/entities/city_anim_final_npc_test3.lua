@@ -230,7 +230,7 @@ function ENT:Draw()
 
 	-- Smooth the entity Z to prevent instant snaps from locomotion step-up
 	self._SmoothPosZ = self._SmoothPosZ or pos.z
-	self._SmoothPosZ = Lerp(0.3, self._SmoothPosZ, pos.z)
+	self._SmoothPosZ = Lerp(0.15, self._SmoothPosZ, pos.z)
 	local smoothPos = Vector(pos.x, pos.y, self._SmoothPosZ)
 
 	-- Step 1: Enable IK on client (server SetIK doesn't propagate to nextbot client entity)

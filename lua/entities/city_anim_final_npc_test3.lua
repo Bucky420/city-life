@@ -402,9 +402,9 @@ function ENT:Draw()
 			self._LastSequence = self:GetSequence()
 		end
 
-		self._FootPush = Lerp(0.08, self._FootPush or 0, targetPush)
-		self._IkOffset = math.min(self._DbgBlendOff + self._FootPush, 0)
-		self._DominantFoot = dominantFoot
+		self._FootPush = Lerp(0.08, self._FootPush or 0, 0)
+		self._IkOffset = self._DbgBlendOff
+		self._DominantFoot = nil
 
 		self._DbgMinZ = minGroundZ
 		self._DbgMaxZ = maxGroundZ

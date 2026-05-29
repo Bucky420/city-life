@@ -41,7 +41,7 @@ function ENT:Initialize()
 	self:SetUseType(SIMPLE_USE)
 
 	self.loco:SetDesiredSpeed(100)
-	self.loco:SetAcceleration(200)
+	self.loco:SetAcceleration(80)
 	self.loco:SetDeceleration(200)
 	self.loco:SetStepHeight(32)
 	self.loco:SetMaxYawRate(180)
@@ -79,9 +79,11 @@ function ENT:BodyUpdate()
 		-- SDK: up stairs min 0.5, down stairs min 0.8
 		stairScale = math.Clamp(1.1 - groundDiff / 16, 0.5, 1.0)
 	end
-	self:SetPlaybackRate(stairScale)
 
 	self:BodyMoveXY()
+
+	-- Apply AFTER BodyMoveXY so it doesn't get overridden
+	self:SetPlaybackRate(stairScale)
 end
 
 function ENT:AcceptInput(name, activator)

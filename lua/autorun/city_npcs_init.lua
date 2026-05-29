@@ -275,11 +275,11 @@ if CLIENT then
             local cls = ent:GetClass()
             local off = ent._IkOffset or 0
             local blend = ent._DbgBlendOff or 0
-            local lw = ent._DbgLW or 1
-            local rw = ent._DbgRW or 1
+            local mn = ent._DbgMinZ or 0
+            local mx = ent._DbgMaxZ or 0
 
-            print(string.format("[DBG] %s[%d] Seq:%s Spd:%.1f %s %s Off:%.1f Bl:%.1f LW:%.2f RW:%.2f",
-                cls, ent:EntIndex(), seqName, spd, lStr, rStr, off, blend, lw, rw))
+            print(string.format("[DBG] %s[%d] Seq:%s Spd:%.1f %s %s Off:%.1f Bl:%.1f Mn:%.1f Mx:%.1f",
+                cls, ent:EntIndex(), seqName, spd, lStr, rStr, off, blend, mn, mx))
         end
     end)
 

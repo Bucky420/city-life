@@ -194,24 +194,6 @@ end
 if CLIENT then
 
 function ENT:FireAnimationEvent(pos, ang, event, name)
-    if event >= 6004 and event <= 6007 then
-        local seq = self:GetSequence()
-        if self._FootEventSeq ~= seq then
-            self._FootEventSeq = seq
-            self._FootEventLeft = nil
-            self._FootEventRight = nil
-        end
-        local cycle = self:GetCycle()
-        if event % 2 == 1 then
-            self._FootEventLeft = cycle
-        else
-            self._FootEventRight = cycle
-        end
-    end
-    if CityNPCs and CityNPCs.DbgEnts and CityNPCs.DbgEnts[self:EntIndex()] then
-        print(string.format("[AnimEvent] %s[%d] event=%d name=%s",
-            self:GetClass(), self:EntIndex(), event, name or "?"))
-    end
 end
 
 function ENT:Draw()
@@ -238,16 +220,22 @@ function ENT:Draw()
 		if mat then rFootWorld = mat:GetTranslation() end
 	end
 
-	-- Step 2: Trace from each foot's ACTUAL world position
-	local r = 3
-	local TRACE_DIST = 48
+	-- Step 2: Trace from each foot world position, track min AND max ground Z
+	local r = 2.5
 
-	local lGroundZ, rGroundZ = nil, nil
+	local TRACE_DIST = 48
+	local minGroundZ = nil
+	local maxGroundZ = nil
+
+	-- Offset trace origin forward from ankle to foot center (~4 units)
+	local fwd = self:GetForward()
+	local footForward = Vector(fwd.x, fwd.y, 0):GetNormalized() * 4
 
 	if lFootWorld then
-		local lEnd = lFootWorld - Vector(0, 0, TRACE_DIST)
+		local lStart = lFootWorld + footForward
+		local lEnd = lStart - Vector(0, 0, TRACE_DIST)
 		local lTr = util.TraceHull({
-			start = lFootWorld,
+			start = lStart,
 			endpos = lEnd,
 			mins = Vector(-r, -r, 0),
 			maxs = Vector(r, r, 1),
@@ -255,22 +243,23 @@ function ENT:Draw()
 			mask = MASK_NPCSOLID_BRUSHONLY
 		})
 		if lTr.Hit then
-			lGroundZ = lTr.HitPos.z
+			minGroundZ = lTr.HitPos.z
+			maxGroundZ = lTr.HitPos.z
 		end
-		-- Visualize left foot trace when debug is on (requires developer 1)
 		if CityNPCs and CityNPCs.DbgEnts and CityNPCs.DbgEnts[self:EntIndex()] then
 			local col = lTr.Hit and Color(0, 255, 0) or Color(255, 0, 0)
 			local endPos = lTr.Hit and lTr.HitPos or lEnd
-			debugoverlay.Cross(lFootWorld, r, 0.01, col, true)
+			debugoverlay.Cross(lStart, r, 0.01, col, true)
 			debugoverlay.Cross(endPos, r, 0.01, col, true)
-			debugoverlay.Line(lFootWorld, endPos, 0.01, col, true)
+			debugoverlay.Line(lStart, endPos, 0.01, col, true)
 		end
 	end
 
 	if rFootWorld then
-		local rEnd = rFootWorld - Vector(0, 0, TRACE_DIST)
+		local rStart = rFootWorld + footForward
+		local rEnd = rStart - Vector(0, 0, TRACE_DIST)
 		local rTr = util.TraceHull({
-			start = rFootWorld,
+			start = rStart,
 			endpos = rEnd,
 			mins = Vector(-r, -r, 0),
 			maxs = Vector(r, r, 1),
@@ -278,61 +267,49 @@ function ENT:Draw()
 			mask = MASK_NPCSOLID_BRUSHONLY
 		})
 		if rTr.Hit then
-			rGroundZ = rTr.HitPos.z
+			if minGroundZ then
+				minGroundZ = math.min(minGroundZ, rTr.HitPos.z)
+			else
+				minGroundZ = rTr.HitPos.z
+			end
+			if maxGroundZ then
+				maxGroundZ = math.max(maxGroundZ, rTr.HitPos.z)
+			else
+				maxGroundZ = rTr.HitPos.z
+			end
 		end
-		-- Visualize right foot trace when debug is on
 		if CityNPCs and CityNPCs.DbgEnts and CityNPCs.DbgEnts[self:EntIndex()] then
 			local col = rTr.Hit and Color(0, 255, 0) or Color(255, 0, 0)
 			local endPos = rTr.Hit and rTr.HitPos or rEnd
-			debugoverlay.Cross(rFootWorld, r, 0.01, col, true)
+			debugoverlay.Cross(rStart, r, 0.01, col, true)
 			debugoverlay.Cross(endPos, r, 0.01, col, true)
-			debugoverlay.Line(rFootWorld, endPos, 0.01, col, true)
+			debugoverlay.Line(rStart, endPos, 0.01, col, true)
 		end
 	end
 
-	-- Step 3: Per-foot plant weight from FireAnimationEvent
-	local lFootWeight = 1
-	local rFootWeight = 1
-	if self._FootEventLeft and self._FootEventRight then
-		local cycle = self:GetCycle()
+	if minGroundZ and maxGroundZ then
+		self._StepOrigin = self._StepOrigin or pos.z
 
-		local ld = math.abs(cycle - self._FootEventLeft)
-		lFootWeight = ld < 0.5 and (math.cos(ld * math.pi * 2) + 1) / 2 or 0
+		local stepHeight = 18
 
-		local rd = math.abs(cycle - self._FootEventRight)
-		rFootWeight = rd < 0.5 and (math.cos(rd * math.pi * 2) + 1) / 2 or 0
-	end
+		self._StepOrigin = self._StepOrigin * 0.95 + minGroundZ * 0.05
 
-	-- Step 4: Weighted blend of both foot grounds
-	local totalWeight = 0
-	local sumZ = 0
-	if lGroundZ then
-		sumZ = sumZ + lGroundZ * lFootWeight
-		totalWeight = totalWeight + lFootWeight
-	end
-	if rGroundZ then
-		sumZ = sumZ + rGroundZ * rFootWeight
-		totalWeight = totalWeight + rFootWeight
-	end
+		local bias = math.Clamp((maxGroundZ - minGroundZ) - stepHeight, 0, stepHeight)
 
-	if totalWeight > 0.01 then
-		local blendZ = sumZ / totalWeight
+		self._DbgBlendOff = math.Clamp(self._StepOrigin - pos.z, -stepHeight + bias, 0)
+		self._IkOffset = self._DbgBlendOff
 
-		self._DbgBlendOff = blendZ - pos.z
-		self._DbgLW = lFootWeight
-		self._DbgRW = rFootWeight
-
-		self._IkOffset = math.Clamp(blendZ - pos.z, -36, 36)
+		self._DbgMinZ = minGroundZ
+		self._DbgMaxZ = maxGroundZ
 	else
 		self._DbgBlendOff = 0
-		self._DbgLW = 0
-		self._DbgRW = 0
+		self._DbgMinZ = pos.z
+		self._DbgMaxZ = pos.z
+		self._StepOrigin = pos.z
 		self._IkOffset = (self._IkOffset or 0) * 0.5
 	end
 
-	-- Debug via citynpc_debug_entity (external Think hook in city_npcs_init.lua)
-
-	-- Step 5: Apply offset and draw
+	-- Step 4: Apply offset and draw
 	self:SetPos(Vector(pos.x, pos.y, pos.z + (self._IkOffset or 0)))
 	self:SetupBones()
 	self:DrawModel()

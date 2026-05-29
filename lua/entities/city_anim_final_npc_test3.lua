@@ -243,16 +243,30 @@ function ENT:Draw()
 	local rFootBone = self:LookupBone("ValveBiped.Bip01_R_Foot")
 
 	-- Get actual bone world positions using matrix (wiki: GetBonePosition can be stale)
-	local lFootWorld = nil
-	local rFootWorld = nil
+	local lFootRaw = nil
+	local rFootRaw = nil
 
 	if lFootBone and lFootBone >= 0 then
 		local mat = self:GetBoneMatrix(lFootBone)
-		if mat then lFootWorld = mat:GetTranslation() end
+		if mat then lFootRaw = mat:GetTranslation() end
 	end
 	if rFootBone and rFootBone >= 0 then
 		local mat = self:GetBoneMatrix(rFootBone)
-		if mat then rFootWorld = mat:GetTranslation() end
+		if mat then rFootRaw = mat:GetTranslation() end
+	end
+
+	-- Smooth foot bone positions so IK targets change gradually
+	local lFootWorld = nil
+	local rFootWorld = nil
+	if lFootRaw then
+		self._SmoothLFoot = self._SmoothLFoot or lFootRaw
+		self._SmoothLFoot = Lerp(0.15, self._SmoothLFoot, lFootRaw)
+		lFootWorld = self._SmoothLFoot
+	end
+	if rFootRaw then
+		self._SmoothRFoot = self._SmoothRFoot or rFootRaw
+		self._SmoothRFoot = Lerp(0.15, self._SmoothRFoot, rFootRaw)
+		rFootWorld = self._SmoothRFoot
 	end
 
 	-- Step 2: Trace from each foot world position, track min AND max ground Z

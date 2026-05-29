@@ -278,15 +278,17 @@ if CLIENT then
             local seqName = ent:GetSequenceName(seq) or "?"
             local spd = ent:GetVelocity():Length2D()
             local cls = ent:GetClass()
+            local pos = ent:GetPos()
             local off = ent._IkOffset or 0
             local blend = ent._DbgBlendOff or 0
             local push = ent._FootPush or 0
             local dom = ent._DominantFoot or "none"
             local mn = ent._DbgMinZ or 0
             local mx = ent._DbgMaxZ or 0
+            local step = ent._StepOrigin or pos.z
 
-            print(string.format("[DBG] %s[%d] Seq:%s Spd:%.1f %s %s Off:%.1f Bl:%.1f Psh:%.1f Dom:%s Mn:%.1f Mx:%.1f",
-                cls, ent:EntIndex(), seqName, spd, lStr, rStr, off, blend, push, dom, mn, mx))
+            print(string.format("[DBG] %s[%d] Seq:%s Spd:%.1f Pos:%.1f SO:%.1f %s %s Off:%.1f Bl:%.1f Psh:%.1f Dom:%s Mn:%.1f Mx:%.1f",
+                cls, ent:EntIndex(), seqName, spd, pos.z, step, lStr, rStr, off, blend, push, dom, mn, mx))
         end
     end)
 

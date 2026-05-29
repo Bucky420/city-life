@@ -332,18 +332,22 @@ function ENT:Draw()
 
 		local stepHeight = 18
 
-		-- Asymmetric filter: fast when ground rises (up stairs), slow when ground falls (down/flat)
-		if minGroundZ > self._StepOrigin then
-			self._StepOrigin = self._StepOrigin * 0.85 + minGroundZ * 0.15
-		else
-			self._StepOrigin = self._StepOrigin * 0.95 + minGroundZ * 0.05
-		end
+		-- Clamp ground to entity level - floor can never be above the entity
+		minGroundZ = math.min(minGroundZ, pos.z)
+		maxGroundZ = math.min(maxGroundZ, pos.z)
 
-		local bias = math.Clamp((maxGroundZ - minGroundZ) - stepHeight, 0, stepHeight)
+		-- Smooth the raw trace Z before feeding to filter
+		self._SmoothMinZ = Lerp(0.3, self._SmoothMinZ or minGroundZ, minGroundZ)
+		self._SmoothMaxZ = Lerp(0.3, self._SmoothMaxZ or maxGroundZ, maxGroundZ)
+
+		-- SDK formula: floor tracks min ground with 0.2/0.8 filter
+		self._StepOrigin = self._StepOrigin * 0.2 + self._SmoothMinZ * 0.8
+
+		local bias = math.Clamp((self._SmoothMaxZ - self._SmoothMinZ) - stepHeight, 0, stepHeight)
 
 		self._DbgBlendOff = math.Clamp(self._StepOrigin - pos.z, -stepHeight + bias, 0)
 
-		-- Foot push: only during walk_all on stairs, only going UP
+		-- Foot push: only during walk_all on stairs
 		local targetPush = 0
 		local dominantFoot = nil
 		if self._DbgBlendOff < -1 and self:GetSequenceName(self:GetSequence()) == "walk_all" then
@@ -363,7 +367,6 @@ function ENT:Draw()
 					local footDist = footName == "left" and (self._LeftFootDist or 99) or (self._RightFootDist or 99)
 					local otherDist = footName == "left" and (self._RightFootDist or 99) or (self._LeftFootDist or 99)
 					local footHitZ = footName == "left" and self._LeftFootHitZ or self._RightFootHitZ
-					-- Only lock if going UP (foot ground above step origin) and foot is close
 					if footDist < 12 and footDist < otherDist and footHitZ and footHitZ > self._StepOrigin then
 						self._LockedDominant = footName
 					end
@@ -372,7 +375,6 @@ function ENT:Draw()
 				-- Use locked foot during push window
 				if self._LockedDominant and past < 0.5 then
 					dominantFoot = self._LockedDominant
-					-- Push = how much higher the planted foot ground is vs step origin, capped at 4
 					local footHitZ = dominantFoot == "left" and self._LeftFootHitZ or self._RightFootHitZ
 					local pushMax = math.Clamp((footHitZ or 0) - self._StepOrigin, 0, 4)
 					if past < 0.12 then
@@ -406,6 +408,8 @@ function ENT:Draw()
 		self._DbgMaxZ = pos.z
 		self._StepOrigin = pos.z
 		self._IkOffset = (self._IkOffset or 0) * 0.5
+		self._SmoothMinZ = nil
+		self._SmoothMaxZ = nil
 	end
 
 	-- Step 4: Apply offset and draw

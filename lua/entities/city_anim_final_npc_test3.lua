@@ -230,7 +230,7 @@ function ENT:Draw()
 
 	-- Smooth the entity Z to prevent instant snaps from locomotion step-up
 	self._SmoothPosZ = self._SmoothPosZ or pos.z
-	self._SmoothPosZ = Lerp(0.08, self._SmoothPosZ, pos.z)
+	self._SmoothPosZ = Lerp(0.05, self._SmoothPosZ, pos.z)
 	local smoothPos = Vector(pos.x, pos.y, self._SmoothPosZ)
 
 	-- Step 1: Enable IK on client (server SetIK doesn't propagate to nextbot client entity)
@@ -343,8 +343,8 @@ function ENT:Draw()
 		maxGroundZ = math.min(maxGroundZ, smoothPos.z)
 
 		-- Smooth the raw trace Z before feeding to filter
-		self._SmoothMinZ = Lerp(0.3, self._SmoothMinZ or minGroundZ, minGroundZ)
-		self._SmoothMaxZ = Lerp(0.3, self._SmoothMaxZ or maxGroundZ, maxGroundZ)
+		self._SmoothMinZ = Lerp(0.15, self._SmoothMinZ or minGroundZ, minGroundZ)
+		self._SmoothMaxZ = Lerp(0.15, self._SmoothMaxZ or maxGroundZ, maxGroundZ)
 
 		-- SDK formula: floor tracks min ground with 0.2/0.8 filter
 		self._StepOrigin = self._StepOrigin * 0.2 + self._SmoothMinZ * 0.8

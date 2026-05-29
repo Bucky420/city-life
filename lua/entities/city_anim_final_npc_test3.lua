@@ -275,8 +275,10 @@ function ENT:Draw()
 			minGroundZ = lTr.HitPos.z
 			maxGroundZ = lTr.HitPos.z
 			self._LeftFootDist = lStart.z - lTr.HitPos.z
+			self._LeftFootHitZ = lTr.HitPos.z
 		else
 			self._LeftFootDist = 99
+			self._LeftFootHitZ = nil
 		end
 		if CityNPCs and CityNPCs.DbgEnts and CityNPCs.DbgEnts[self:EntIndex()] then
 			local isActive = math.abs(self._FootPush or 0) > 0.5 and self._DominantFoot == "left"
@@ -311,8 +313,10 @@ function ENT:Draw()
 				maxGroundZ = rTr.HitPos.z
 			end
 			self._RightFootDist = rStart.z - rTr.HitPos.z
+			self._RightFootHitZ = rTr.HitPos.z
 		else
 			self._RightFootDist = 99
+			self._RightFootHitZ = nil
 		end
 		if CityNPCs and CityNPCs.DbgEnts and CityNPCs.DbgEnts[self:EntIndex()] then
 			local isActive = math.abs(self._FootPush or 0) > 0.5 and self._DominantFoot == "right"
@@ -335,7 +339,7 @@ function ENT:Draw()
 
 		self._DbgBlendOff = math.Clamp(self._StepOrigin - pos.z, -stepHeight + bias, 0)
 
-		-- Foot push: only during walk_all on stairs
+		-- Foot push: only during walk_all on stairs, only going UP
 		local targetPush = 0
 		local dominantFoot = nil
 		if self._DbgBlendOff < -1 and self:GetSequenceName(self:GetSequence()) == "walk_all" then
@@ -350,23 +354,27 @@ function ENT:Draw()
 				end
 
 				-- Lock dominant foot at engage, hold through push window
-				if past < 0.15 then
+				if past < 0.12 then
 					local footName = (pastIdx % 2 == 1) and "left" or "right"
 					local footDist = footName == "left" and (self._LeftFootDist or 99) or (self._RightFootDist or 99)
 					local otherDist = footName == "left" and (self._RightFootDist or 99) or (self._LeftFootDist or 99)
-					if footDist < 12 and footDist < otherDist then
+					local footHitZ = footName == "left" and self._LeftFootHitZ or self._RightFootHitZ
+					-- Only lock if going UP (foot ground above step origin) and foot is close
+					if footDist < 12 and footDist < otherDist and footHitZ and footHitZ > self._StepOrigin then
 						self._LockedDominant = footName
-						self._PushEnd = past + 0.45
 					end
 				end
 
-				-- Use locked foot during push window, re-lock on next plant
-				if self._LockedDominant and past < 0.5 then
+				-- Use locked foot during push window
+				if self._LockedDominant and past < 0.45 then
 					dominantFoot = self._LockedDominant
-					if past < 0.15 then
-						targetPush = -self._DbgBlendOff
+					-- Push = how much higher the planted foot ground is vs step origin, capped at 4
+					local footHitZ = dominantFoot == "left" and self._LeftFootHitZ or self._RightFootHitZ
+					local pushMax = math.Clamp((footHitZ or 0) - self._StepOrigin, 0, 4)
+					if past < 0.12 then
+						targetPush = pushMax
 					elseif past < 0.45 then
-						targetPush = -self._DbgBlendOff * (1 - (past - 0.15) / 0.3)
+						targetPush = pushMax * (1 - (past - 0.12) / 0.33)
 					end
 				else
 					self._LockedDominant = nil
@@ -382,7 +390,7 @@ function ENT:Draw()
 			self._LastSequence = self:GetSequence()
 		end
 
-		self._FootPush = Lerp(0.1, self._FootPush or 0, targetPush)
+		self._FootPush = Lerp(0.08, self._FootPush or 0, targetPush)
 		self._IkOffset = self._DbgBlendOff + self._FootPush
 		self._DominantFoot = dominantFoot
 

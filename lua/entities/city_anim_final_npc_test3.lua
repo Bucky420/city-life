@@ -353,9 +353,9 @@ function ENT:Draw()
 
 		self._DbgBlendOff = math.Clamp(self._StepOrigin - smoothPos.z, -stepHeight + bias, 0)
 
-		-- Foot push: subtracts from the offset to push entity UP when foot plants on higher ground
-		-- Push strength = how much of the offset to cancel (0 = no push, 1 = full cancel)
-		local PUSH_STRENGTH = 0.4  -- tune this: 0 = off, 0.5 = half cancel, 1 = full cancel
+		-- Foot push: raises root motion Z when foot plants on higher ground
+		-- Push target = how much higher the planted foot ground is vs current root
+		local PUSH_STRENGTH = 0.5  -- tune: fraction of height difference to push
 		local targetPush = 0
 		local dominantFoot = nil
 		if self._DbgBlendOff < -1 and self:GetSequenceName(self:GetSequence()) == "walk_all" then
@@ -382,11 +382,10 @@ function ENT:Draw()
 				-- Use locked foot during push window
 				if self._LockedDominant and past < 0.5 then
 					dominantFoot = self._LockedDominant
-					if past < 0.12 then
-						targetPush = PUSH_STRENGTH
-					elseif past < 0.5 then
-						targetPush = PUSH_STRENGTH * (1 - (past - 0.12) / 0.38)
-					end
+					local footHitZ = dominantFoot == "left" and self._LeftFootHitZ or self._RightFootHitZ
+					-- Push = how much higher the foot ground is vs current root
+					local pushHeight = math.max((footHitZ or 0) - smoothPos.z, 0)
+					targetPush = pushHeight * PUSH_STRENGTH
 				else
 					self._LockedDominant = nil
 				end
@@ -401,9 +400,10 @@ function ENT:Draw()
 			self._LastSequence = self:GetSequence()
 		end
 
-		-- Push subtracts from offset: offset * (1 - push) makes entity higher
+		-- Push raises root motion Z (can go above raw pos)
 		self._FootPush = Lerp(0.08, self._FootPush or 0, targetPush)
-		self._IkOffset = self._DbgBlendOff * (1 - self._FootPush)
+		self._SmoothPosZ = self._SmoothPosZ + self._FootPush
+		self._IkOffset = self._DbgBlendOff
 		self._DominantFoot = dominantFoot
 
 		self._DbgMinZ = minGroundZ

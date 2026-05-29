@@ -41,7 +41,7 @@ function ENT:Initialize()
 	self:SetUseType(SIMPLE_USE)
 
 	self.loco:SetDesiredSpeed(100)
-	self.loco:SetAcceleration(80)
+	self.loco:SetAcceleration(150)
 	self.loco:SetDeceleration(200)
 	self.loco:SetStepHeight(32)
 	self.loco:SetMaxYawRate(180)

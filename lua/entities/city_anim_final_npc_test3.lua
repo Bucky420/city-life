@@ -227,6 +227,12 @@ end
 function ENT:Draw()
 	self:PrintAnimEvents()
 	local pos = self:GetPos()
+
+	-- Smooth the entity Z to prevent instant snaps from locomotion step-up
+	self._SmoothPosZ = self._SmoothPosZ or pos.z
+	self._SmoothPosZ = Lerp(0.2, self._SmoothPosZ, pos.z)
+	local smoothPos = Vector(pos.x, pos.y, self._SmoothPosZ)
+
 	-- Step 1: Enable IK on client (server SetIK doesn't propagate to nextbot client entity)
 	self:SetIK(true)
 
@@ -328,13 +334,13 @@ function ENT:Draw()
 	end
 
 	if minGroundZ and maxGroundZ then
-		self._StepOrigin = self._StepOrigin or pos.z
+		self._StepOrigin = self._StepOrigin or smoothPos.z
 
 		local stepHeight = 18
 
 		-- Clamp ground to entity level - floor can never be above the entity
-		minGroundZ = math.min(minGroundZ, pos.z)
-		maxGroundZ = math.min(maxGroundZ, pos.z)
+		minGroundZ = math.min(minGroundZ, smoothPos.z)
+		maxGroundZ = math.min(maxGroundZ, smoothPos.z)
 
 		-- Smooth the raw trace Z before feeding to filter
 		self._SmoothMinZ = Lerp(0.3, self._SmoothMinZ or minGroundZ, minGroundZ)
@@ -345,7 +351,7 @@ function ENT:Draw()
 
 		local bias = math.Clamp((self._SmoothMaxZ - self._SmoothMinZ) - stepHeight, 0, stepHeight)
 
-		self._DbgBlendOff = math.Clamp(self._StepOrigin - pos.z, -stepHeight + bias, 0)
+		self._DbgBlendOff = math.Clamp(self._StepOrigin - smoothPos.z, -stepHeight + bias, 0)
 
 		-- Foot push: only during walk_all on stairs
 		local targetPush = 0
@@ -404,9 +410,9 @@ function ENT:Draw()
 		self._DbgMaxZ = maxGroundZ
 	else
 		self._DbgBlendOff = 0
-		self._DbgMinZ = pos.z
-		self._DbgMaxZ = pos.z
-		self._StepOrigin = pos.z
+		self._DbgMinZ = smoothPos.z
+		self._DbgMaxZ = smoothPos.z
+		self._StepOrigin = smoothPos.z
 		self._IkOffset = (self._IkOffset or 0) * 0.5
 		self._SmoothMinZ = nil
 		self._SmoothMaxZ = nil

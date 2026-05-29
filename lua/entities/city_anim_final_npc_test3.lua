@@ -43,7 +43,7 @@ function ENT:Initialize()
 	self.loco:SetDesiredSpeed(60)
 	self.loco:SetAcceleration(300)
 	self.loco:SetDeceleration(300)
-	self.loco:SetStepHeight(18)
+	self.loco:SetStepHeight(32)
 	self.loco:SetMaxYawRate(180)
 
 	self:StartActivity(ACT_IDLE)
@@ -196,7 +196,36 @@ if CLIENT then
 function ENT:FireAnimationEvent(pos, ang, event, name)
 end
 
+function ENT:PrintAnimEvents()
+	if self._EventsPrinted then return end
+	self._EventsPrinted = true
+
+	local mdl = self:GetModel()
+	local info = util.GetModelInfo(mdl)
+	if not info or not info.Sequences then return end
+
+	self._PlantCycles = {}
+
+	print("=== Animation Events for " .. mdl .. " ===")
+
+	for _, seq in ipairs(info.Sequences) do
+		if seq.Events and #seq.Events > 0 then
+			print(string.format("  Seq: %s (act: %s)", seq.Name, seq.Activity or "?"))
+			for _, ev in ipairs(seq.Events) do
+				print(string.format("    Cycle: %.4f  Event: %d  Name: %s  Type: %d",
+					ev.Cycle, ev.Event, ev.Name or "?", ev.Type or 0))
+				if seq.Name == "walk_all" and (ev.Event == 6006 or ev.Event == 6007) then
+					self._PlantCycles[#self._PlantCycles + 1] = ev.Cycle
+				end
+			end
+		end
+	end
+
+	print("=== End Animation Events ===")
+end
+
 function ENT:Draw()
+	self:PrintAnimEvents()
 	local pos = self:GetPos()
 	-- Step 1: Enable IK on client (server SetIK doesn't propagate to nextbot client entity)
 	self:SetIK(true)
@@ -297,7 +326,26 @@ function ENT:Draw()
 		local bias = math.Clamp((maxGroundZ - minGroundZ) - stepHeight, 0, stepHeight)
 
 		self._DbgBlendOff = math.Clamp(self._StepOrigin - pos.z, -stepHeight + bias, 0)
-		self._IkOffset = self._DbgBlendOff
+
+		-- Foot push: smooth lerp toward target based on plant cycle
+		local targetPush = 0
+		local plantCycles = self._PlantCycles
+		if plantCycles and #plantCycles > 0 then
+			local cycle = self:GetCycle()
+			local past = 1
+			for i = 1, #plantCycles do
+				local dt = (cycle - plantCycles[i]) % 1
+				if dt < past then past = dt end
+			end
+			if past < 0.2 then
+				targetPush = -self._DbgBlendOff
+			elseif past < 0.4 then
+				targetPush = -self._DbgBlendOff * (1 - (past - 0.2) / 0.2)
+			end
+		end
+
+		self._FootPush = Lerp(0.2, self._FootPush or 0, targetPush)
+		self._IkOffset = self._DbgBlendOff + self._FootPush
 
 		self._DbgMinZ = minGroundZ
 		self._DbgMaxZ = maxGroundZ

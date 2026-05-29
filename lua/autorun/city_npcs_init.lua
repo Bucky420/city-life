@@ -248,14 +248,18 @@ if CLIENT then
             local rFootBone = ent:LookupBone("ValveBiped.Bip01_R_Foot")
 
             local lStr, rStr = "L:?", "R:?"
+            local r = 2.5
+            local fwd = ent:GetForward()
+            local footForward = Vector(fwd.x, fwd.y, 0):GetNormalized() * 4
             if lFootBone and lFootBone >= 0 then
                 local mat = ent:GetBoneMatrix(lFootBone)
                 if mat then
                     local fw = mat:GetTranslation()
                     local lz = string.format("%.1f", ent:WorldToLocal(fw).z)
-                    local tr = util.TraceLine({start=fw, endpos=fw-Vector(0,0,48), filter=ent, mask=MASK_SOLID})
-                    local d = tr.Hit and string.format("%.1f", fw.z-tr.HitPos.z) or "miss"
-                    lStr = string.format("LZ:%s D:%s", lz, d)
+                    local lStart = fw + footForward
+                    local tr = util.TraceHull({start=lStart, endpos=lStart-Vector(0,0,72), mins=Vector(-r,-r,0), maxs=Vector(r,r,1), filter=ent, mask=MASK_SOLID})
+                    local d = tr.Hit and string.format("%.1f", tr.HitPos.z) or "miss"
+                    lStr = string.format("LZ:%s HitZ:%s H:%s", lz, d, tr.Hit and "Y" or "N")
                 end
             end
             if rFootBone and rFootBone >= 0 then
@@ -263,9 +267,10 @@ if CLIENT then
                 if mat then
                     local fw = mat:GetTranslation()
                     local rz = string.format("%.1f", ent:WorldToLocal(fw).z)
-                    local tr = util.TraceLine({start=fw, endpos=fw-Vector(0,0,48), filter=ent, mask=MASK_SOLID})
-                    local d = tr.Hit and string.format("%.1f", fw.z-tr.HitPos.z) or "miss"
-                    rStr = string.format("RZ:%s D:%s", rz, d)
+                    local rStart = fw + footForward
+                    local tr = util.TraceHull({start=rStart, endpos=rStart-Vector(0,0,72), mins=Vector(-r,-r,0), maxs=Vector(r,r,1), filter=ent, mask=MASK_SOLID})
+                    local d = tr.Hit and string.format("%.1f", tr.HitPos.z) or "miss"
+                    rStr = string.format("RZ:%s HitZ:%s H:%s", rz, d, tr.Hit and "Y" or "N")
                 end
             end
 
@@ -275,11 +280,13 @@ if CLIENT then
             local cls = ent:GetClass()
             local off = ent._IkOffset or 0
             local blend = ent._DbgBlendOff or 0
+            local push = ent._FootPush or 0
+            local dom = ent._DominantFoot or "none"
             local mn = ent._DbgMinZ or 0
             local mx = ent._DbgMaxZ or 0
 
-            print(string.format("[DBG] %s[%d] Seq:%s Spd:%.1f %s %s Off:%.1f Bl:%.1f Mn:%.1f Mx:%.1f",
-                cls, ent:EntIndex(), seqName, spd, lStr, rStr, off, blend, mn, mx))
+            print(string.format("[DBG] %s[%d] Seq:%s Spd:%.1f %s %s Off:%.1f Bl:%.1f Psh:%.1f Dom:%s Mn:%.1f Mx:%.1f",
+                cls, ent:EntIndex(), seqName, spd, lStr, rStr, off, blend, push, dom, mn, mx))
         end
     end)
 

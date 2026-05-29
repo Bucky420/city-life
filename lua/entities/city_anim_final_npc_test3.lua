@@ -252,7 +252,7 @@ function ENT:Draw()
 	-- Step 2: Trace from each foot world position, track min AND max ground Z
 	local r = 2.5
 
-	local TRACE_DIST = 48
+	local TRACE_DIST = 72
 	local minGroundZ = nil
 	local maxGroundZ = nil
 
@@ -269,14 +269,18 @@ function ENT:Draw()
 			mins = Vector(-r, -r, 0),
 			maxs = Vector(r, r, 1),
 			filter = self,
-			mask = MASK_NPCSOLID_BRUSHONLY
+			mask = MASK_SOLID
 		})
 		if lTr.Hit then
 			minGroundZ = lTr.HitPos.z
 			maxGroundZ = lTr.HitPos.z
+			self._LeftFootDist = lStart.z - lTr.HitPos.z
+		else
+			self._LeftFootDist = 99
 		end
 		if CityNPCs and CityNPCs.DbgEnts and CityNPCs.DbgEnts[self:EntIndex()] then
-			local col = lTr.Hit and Color(0, 255, 0) or Color(255, 0, 0)
+			local isActive = math.abs(self._FootPush or 0) > 0.5 and self._DominantFoot == "left"
+			local col = isActive and Color(255, 128, 0) or Color(0, 255, 0)
 			local endPos = lTr.Hit and lTr.HitPos or lEnd
 			debugoverlay.Cross(lStart, r, 0.01, col, true)
 			debugoverlay.Cross(endPos, r, 0.01, col, true)
@@ -293,7 +297,7 @@ function ENT:Draw()
 			mins = Vector(-r, -r, 0),
 			maxs = Vector(r, r, 1),
 			filter = self,
-			mask = MASK_NPCSOLID_BRUSHONLY
+			mask = MASK_SOLID
 		})
 		if rTr.Hit then
 			if minGroundZ then
@@ -306,9 +310,13 @@ function ENT:Draw()
 			else
 				maxGroundZ = rTr.HitPos.z
 			end
+			self._RightFootDist = rStart.z - rTr.HitPos.z
+		else
+			self._RightFootDist = 99
 		end
 		if CityNPCs and CityNPCs.DbgEnts and CityNPCs.DbgEnts[self:EntIndex()] then
-			local col = rTr.Hit and Color(0, 255, 0) or Color(255, 0, 0)
+			local isActive = math.abs(self._FootPush or 0) > 0.5 and self._DominantFoot == "right"
+			local col = isActive and Color(255, 128, 0) or Color(0, 255, 0)
 			local endPos = rTr.Hit and rTr.HitPos or rEnd
 			debugoverlay.Cross(rStart, r, 0.01, col, true)
 			debugoverlay.Cross(endPos, r, 0.01, col, true)
@@ -327,25 +335,41 @@ function ENT:Draw()
 
 		self._DbgBlendOff = math.Clamp(self._StepOrigin - pos.z, -stepHeight + bias, 0)
 
-		-- Foot push: smooth lerp toward target based on plant cycle
+		-- Foot push: only during walk_all on stairs
 		local targetPush = 0
-		local plantCycles = self._PlantCycles
-		if plantCycles and #plantCycles > 0 then
-			local cycle = self:GetCycle()
-			local past = 1
-			for i = 1, #plantCycles do
-				local dt = (cycle - plantCycles[i]) % 1
-				if dt < past then past = dt end
-			end
-			if past < 0.2 then
-				targetPush = -self._DbgBlendOff
-			elseif past < 0.4 then
-				targetPush = -self._DbgBlendOff * (1 - (past - 0.2) / 0.2)
+		local dominantFoot = nil
+		if self._DbgBlendOff < -1 and self:GetSequenceName(self:GetSequence()) == "walk_all" then
+			local plantCycles = self._PlantCycles
+			if plantCycles and #plantCycles > 0 then
+				local cycle = self:GetCycle()
+				local past = 1
+				local pastIdx = 1
+				for i = 1, #plantCycles do
+					local dt = (cycle - plantCycles[i]) % 1
+					if dt < past then past = dt; pastIdx = i end
+				end
+				local footName = (pastIdx % 2 == 1) and "left" or "right"
+				local footDist = footName == "left" and (self._LeftFootDist or 99) or (self._RightFootDist or 99)
+				if footDist < 8 then
+					dominantFoot = footName
+					if past < 0.15 then
+						targetPush = -self._DbgBlendOff
+					elseif past < 0.45 then
+						targetPush = -self._DbgBlendOff * (1 - (past - 0.15) / 0.3)
+					end
+				end
 			end
 		end
 
-		self._FootPush = Lerp(0.2, self._FootPush or 0, targetPush)
+		-- Reset push on sequence change
+		if self._LastSequence ~= self:GetSequence() then
+			self._FootPush = 0
+			self._LastSequence = self:GetSequence()
+		end
+
+		self._FootPush = Lerp(0.1, self._FootPush or 0, targetPush)
 		self._IkOffset = self._DbgBlendOff + self._FootPush
+		self._DominantFoot = dominantFoot
 
 		self._DbgMinZ = minGroundZ
 		self._DbgMaxZ = maxGroundZ

@@ -373,13 +373,9 @@ function ENT:Draw()
 
 		local bias = math.Clamp((self._SmoothMaxZ - self._SmoothMinZ) - stepHeight, 0, stepHeight)
 
-		-- Going DOWN: entity already at correct level via locomotion, no offset
-		-- Only apply offset when going UP (higher foot is above entity)
-		if maxGroundZ <= pos.z then
-			self._DbgBlendOff = 0
-		else
-			self._DbgBlendOff = math.Clamp(self._StepOrigin - pos.z, -stepHeight + bias, 0)
-		end
+		-- Going DOWN: small offset so IK has room to pull feet to ground
+		-- Going UP: full offset to match lower foot level
+		self._DbgBlendOff = math.Clamp(self._StepOrigin - pos.z, -stepHeight + bias, 0)
 
 		-- Foot push: raises root motion Z when foot plants on higher ground
 		local PUSH_STRENGTH = 0.5

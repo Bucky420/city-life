@@ -16,9 +16,9 @@ local FOLLOW_START_DIST = 110
 local FOLLOW_RUN_DIST = 450
 local FOLLOW_LOST_DIST  = 30000
 
-local FOLLOW_SPEED_WALK = 85
-local FOLLOW_SPEED_RUN = 150
-local FOLLOW_SPEED_IDLE = 60
+local FOLLOW_SPEED_WALK = 30
+local FOLLOW_SPEED_RUN = 50
+local FOLLOW_SPEED_IDLE = 5
 
 local TURN_GESTURE_COOLDOWN = 0.5
 local TURN_GESTURE_MIN_DELTA = 15
@@ -41,7 +41,7 @@ function ENT:Initialize()
 	self:SetUseType(SIMPLE_USE)
 
 	self.loco:SetDesiredSpeed(100)
-	self.loco:SetAcceleration(150)
+	self.loco:SetAcceleration(200)
 	self.loco:SetDeceleration(200)
 	self.loco:SetStepHeight(32)
 	self.loco:SetMaxYawRate(180)
@@ -56,7 +56,7 @@ end
 function ENT:BodyUpdate()
 	local act = self:GetActivity()
 	local speed = self.loco:GetVelocity():Length2D()
-	local wantMove = speed > 5
+	local wantMove = speed > 3
 
 	local newAct = wantMove and ACT_WALK or ACT_IDLE
 
@@ -76,14 +76,13 @@ function ENT:BodyUpdate()
 	local groundDiff = math.abs((self._SmoothMaxZ or 0) - (self._SmoothMinZ or 0))
 	local stairScale = 1.0
 	if groundDiff > 1 then
-		-- SDK: up stairs min 0.5, down stairs min 0.8
-		stairScale = math.Clamp(1.1 - groundDiff / 16, 0.5, 1.0)
+		FOLLOW_SPEED_WALK = 30
+		self._DesiredSpeed = 30
 	end
 
 	self:BodyMoveXY()
 
-	-- Apply AFTER BodyMoveXY so it doesn't get overridden
-	self:SetPlaybackRate(stairScale)
+	
 end
 
 function ENT:AcceptInput(name, activator)

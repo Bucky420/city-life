@@ -246,6 +246,11 @@ if CLIENT then
 
             local lFootBone = ent:LookupBone("ValveBiped.Bip01_L_Foot")
             local rFootBone = ent:LookupBone("ValveBiped.Bip01_R_Foot")
+            local lKneeBone = ent:LookupBone("ValveBiped.Bip01_L_Calf")
+            local rKneeBone = ent:LookupBone("ValveBiped.Bip01_R_Calf")
+            local lThighBone = ent:LookupBone("ValveBiped.Bip01_L_Thigh")
+            local rThighBone = ent:LookupBone("ValveBiped.Bip01_R_Thigh")
+            local pelvisBone = ent:LookupBone("ValveBiped.Bip01_Pelvis")
 
             local lStr, rStr = "L:?", "R:?"
             local r = 2.5
@@ -287,8 +292,20 @@ if CLIENT then
             local mx = ent._DbgMaxZ or 0
             local step = ent._StepOrigin or pos.z
 
-            print(string.format("[DBG] %s[%d] Seq:%s Spd:%.1f Pos:%.1f SO:%.1f %s %s Off:%.1f Bl:%.1f Psh:%.1f Dom:%s Mn:%.1f Mx:%.1f",
-                cls, ent:EntIndex(), seqName, spd, pos.z, step, lStr, rStr, off, blend, push, dom, mn, mx))
+            -- Extra info for stock NPCs: bone world Z, ground entity, cycle
+            local boneInfo = ""
+            if pelvisBone and pelvisBone >= 0 then
+                local mat = ent:GetBoneMatrix(pelvisBone)
+                if mat then boneInfo = string.format(" Pelv:%.1f", mat:GetTranslation().z) end
+            end
+            local groundInfo = ""
+            local ge = ent:GetGroundEntity()
+            if IsValid(ge) then groundInfo = " Gnd:" .. ge:GetClass() end
+            local cycleInfo = string.format(" Cyc:%.2f", ent:GetCycle())
+            local rateInfo = string.format(" Rate:%.2f", ent:GetPlaybackRate())
+
+            print(string.format("[DBG] %s[%d] Seq:%s Spd:%.1f Pos:%.1f SO:%.1f %s %s Off:%.1f Bl:%.1f Psh:%.1f Dom:%s Mn:%.1f Mx:%.1f%s%s%s",
+                cls, ent:EntIndex(), seqName, spd, pos.z, step, lStr, rStr, off, blend, push, dom, mn, mx, boneInfo, groundInfo, cycleInfo, rateInfo))
         end
     end)
 

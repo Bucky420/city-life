@@ -239,17 +239,8 @@ function ENT:Draw()
 	self:PrintAnimEvents()
 	local pos = self:GetPos()
 
-	-- Smooth the entity Z: fast down (gravity/falling), slow up (prevent step snap)
-	-- SDK: entity falls naturally via gravity, smooth only the upward step-up
-	self._SmoothPosZ = self._SmoothPosZ or pos.z
-	if pos.z < self._SmoothPosZ then
-		-- Going DOWN: fast drop, like SDK gravity
-		self._SmoothPosZ = Lerp(0.4, self._SmoothPosZ, pos.z)
-	else
-		-- Going UP: slow rise, prevent step snap
-		self._SmoothPosZ = Lerp(0.05, self._SmoothPosZ, pos.z)
-	end
-	local smoothPos = Vector(pos.x, pos.y, self._SmoothPosZ)
+	-- SDK: entity position snaps to ground via locomotion, no smoothing
+	-- IK handles the rest. No forward prediction.
 
 	-- Step 1: Enable IK on client (server SetIK doesn't propagate to nextbot client entity)
 	self:SetIK(true)
@@ -366,13 +357,13 @@ function ENT:Draw()
 	end
 
 	if minGroundZ and maxGroundZ then
-		self._StepOrigin = self._StepOrigin or smoothPos.z
+		self._StepOrigin = self._StepOrigin or pos.z
 
 		local stepHeight = 18
 
 		-- Clamp ground to entity level - floor can never be above the entity
-		minGroundZ = math.min(minGroundZ, smoothPos.z)
-		maxGroundZ = math.min(maxGroundZ, smoothPos.z)
+		minGroundZ = math.min(minGroundZ, pos.z)
+		maxGroundZ = math.min(maxGroundZ, pos.z)
 
 		-- Smooth the raw trace Z before feeding to filter
 		self._SmoothMinZ = Lerp(0.15, self._SmoothMinZ or minGroundZ, minGroundZ)
@@ -383,11 +374,10 @@ function ENT:Draw()
 
 		local bias = math.Clamp((self._SmoothMaxZ - self._SmoothMinZ) - stepHeight, 0, stepHeight)
 
-		self._DbgBlendOff = math.Clamp(self._StepOrigin - smoothPos.z, -stepHeight + bias, 0)
+		self._DbgBlendOff = math.Clamp(self._StepOrigin - pos.z, -stepHeight + bias, 0)
 
 		-- Foot push: raises root motion Z when foot plants on higher ground
-		-- Push target = how much higher the planted foot ground is vs current root
-		local PUSH_STRENGTH = 0.5  -- tune: fraction of height difference to push
+		local PUSH_STRENGTH = 0.5
 		local targetPush = 0
 		local dominantFoot = nil
 		if self._DbgBlendOff < -1 and self:GetSequenceName(self:GetSequence()) == "walk_all" then
@@ -401,7 +391,6 @@ function ENT:Draw()
 					if dt < past then past = dt; pastIdx = i end
 				end
 
-				-- Lock dominant foot at engage, hold through push window
 				if past < 0.12 then
 					local footName = (pastIdx % 2 == 1) and "left" or "right"
 					local footDist = footName == "left" and (self._LeftFootDist or 99) or (self._RightFootDist or 99)
@@ -411,12 +400,10 @@ function ENT:Draw()
 					end
 				end
 
-				-- Use locked foot during push window
 				if self._LockedDominant and past < 0.5 then
 					dominantFoot = self._LockedDominant
 					local footHitZ = dominantFoot == "left" and self._LeftFootHitZ or self._RightFootHitZ
-					-- Push = how much higher the foot ground is vs current root
-					local pushHeight = math.max((footHitZ or 0) - smoothPos.z, 0)
+					local pushHeight = math.max((footHitZ or 0) - pos.z, 0)
 					targetPush = pushHeight * PUSH_STRENGTH
 				else
 					self._LockedDominant = nil
@@ -426,32 +413,30 @@ function ENT:Draw()
 			self._LockedDominant = nil
 		end
 
-		-- Reset push on sequence change
 		if self._LastSequence ~= self:GetSequence() then
 			self._FootPush = 0
 			self._LastSequence = self:GetSequence()
 		end
 
-		-- Push raises root motion Z (can go above raw pos)
+		-- Push subtracts from offset: offset * (1 - push) makes entity higher
 		self._FootPush = Lerp(0.08, self._FootPush or 0, targetPush)
-		self._SmoothPosZ = self._SmoothPosZ + self._FootPush
-		self._IkOffset = self._DbgBlendOff
+		self._IkOffset = self._DbgBlendOff * (1 - self._FootPush)
 		self._DominantFoot = dominantFoot
 
 		self._DbgMinZ = minGroundZ
 		self._DbgMaxZ = maxGroundZ
 	else
 		self._DbgBlendOff = 0
-		self._DbgMinZ = smoothPos.z
-		self._DbgMaxZ = smoothPos.z
-		self._StepOrigin = smoothPos.z
+		self._DbgMinZ = pos.z
+		self._DbgMaxZ = pos.z
+		self._StepOrigin = pos.z
 		self._IkOffset = (self._IkOffset or 0) * 0.5
 		self._SmoothMinZ = nil
 		self._SmoothMaxZ = nil
 	end
 
 	-- Step 4: Apply offset and draw
-	self:SetPos(Vector(smoothPos.x, smoothPos.y, smoothPos.z + (self._IkOffset or 0)))
+	self:SetPos(Vector(pos.x, pos.y, pos.z + (self._IkOffset or 0)))
 	self:SetupBones()
 	self:DrawModel()
 	self:SetPos(pos)

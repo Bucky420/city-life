@@ -43,7 +43,7 @@ function ENT:Initialize()
 	self.loco:SetDesiredSpeed(100)
 	self.loco:SetAcceleration(200)
 	self.loco:SetDeceleration(200)
-	self.loco:SetStepHeight(32)
+	self.loco:SetStepHeight(18)
 	self.loco:SetMaxYawRate(180)
 
 	self:StartActivity(ACT_IDLE)

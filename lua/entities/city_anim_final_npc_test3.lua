@@ -72,17 +72,16 @@ function ENT:BodyUpdate()
 	end
 
 	-- SDK-style speed scaling on stairs: slow animation when feet are at different heights
-	-- Matches BuildVelocityScript's m_flPredictiveSpeedAdjust
 	local groundDiff = math.abs((self._SmoothMaxZ or 0) - (self._SmoothMinZ or 0))
 	local stairScale = 1.0
 	if groundDiff > 1 then
-		FOLLOW_SPEED_WALK = 30
-		self._DesiredSpeed = 30
+		stairScale = math.Clamp(1.1 - groundDiff / 16, 0.5, 1.0)
 	end
 
 	self:BodyMoveXY()
 
-	
+	-- Apply AFTER BodyMoveXY so it doesn't get overridden
+	self:SetPlaybackRate(stairScale)
 end
 
 function ENT:AcceptInput(name, activator)

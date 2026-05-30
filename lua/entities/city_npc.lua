@@ -12,7 +12,7 @@ ENT.Instructions = "Spawn and they will walk on sidewalks"
 
 function ENT:Initialize()
     self:SetModel("models/Humans/Group03/male_01.mdl")
-    if SERVER then
+    if SERVER then 
         self:PhysicsInit(SOLID_BBOX)
         self:SetMoveType(MOVETYPE_STEP)
         self:SetSolid(SOLID_BBOX)

@@ -7,7 +7,7 @@ list.Set("NPC", "city_npc", {
 })
 
 list.Set("NPC", "city_anim_test_npc", {
-    Name = "Test v1",
+    Name = "Test v1", 
     Class = "city_anim_test_npc",
     Category = "Citizens"
 })
@@ -307,7 +307,9 @@ if CLIENT then
             local cycleInfo = string.format(" Cyc:%.2f", ent:GetCycle())
             local rateInfo = string.format(" Rate:%.2f", ent:GetPlaybackRate())
             local layerInfo = ""
-            local numLayers = ent:GetNumAnimOverlays and ent:GetNumAnimOverlays() or 0
+            local numLayers = 0
+            local ok, nl = pcall(function() return ent:GetNumAnimOverlays() end)
+            if ok and nl then numLayers = nl end
             if numLayers > 0 then
                 layerInfo = string.format(" Layers:%d", numLayers)
                 for i = 0, numLayers - 1 do

@@ -306,9 +306,22 @@ if CLIENT then
             if IsValid(ge) then groundInfo = " Gnd:" .. ge:GetClass() end
             local cycleInfo = string.format(" Cyc:%.2f", ent:GetCycle())
             local rateInfo = string.format(" Rate:%.2f", ent:GetPlaybackRate())
+            local layerInfo = ""
+            local numLayers = ent:GetNumAnimOverlays and ent:GetNumAnimOverlays() or 0
+            if numLayers > 0 then
+                layerInfo = string.format(" Layers:%d", numLayers)
+                for i = 0, numLayers - 1 do
+                    local layer = ent:GetAnimOverlay(i)
+                    if layer and layer:GetWeight() > 0 then
+                        layerInfo = layerInfo .. string.format(" [%d:%s W:%.2f C:%.2f R:%.2f]",
+                            i, ent:GetSequenceName(layer:GetSequence()) or "?",
+                            layer:GetWeight(), layer:GetCycle(), layer:GetPlaybackRate())
+                    end
+                end
+            end
 
-            print(string.format("[DBG] %s[%d] Seq:%s Act:%d GS:%.1f Dur:%.2f Spd:%.1f Pos:%.1f SO:%.1f %s %s Off:%.1f Bl:%.1f Psh:%.1f Dom:%s Mn:%.1f Mx:%.1f%s%s%s",
-                cls, ent:EntIndex(), seqName, seqAct, groundSpeed, seqDur, spd, pos.z, step, lStr, rStr, off, blend, push, dom, mn, mx, boneInfo, groundInfo, cycleInfo, rateInfo))
+            print(string.format("[DBG] %s[%d] Seq:%s Act:%d GS:%.1f Dur:%.2f Spd:%.1f Pos:%.1f SO:%.1f %s %s Off:%.1f Bl:%.1f Psh:%.1f Dom:%s Mn:%.1f Mx:%.1f%s%s%s%s",
+                cls, ent:EntIndex(), seqName, seqAct, groundSpeed, seqDur, spd, pos.z, step, lStr, rStr, off, blend, push, dom, mn, mx, boneInfo, groundInfo, cycleInfo, rateInfo, layerInfo))
         end
     end)
 

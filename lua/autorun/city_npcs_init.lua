@@ -281,6 +281,9 @@ if CLIENT then
 
             local seq = ent:GetSequence()
             local seqName = ent:GetSequenceName(seq) or "?"
+            local seqAct = ent:GetSequenceActivity(seq) or -1
+            local groundSpeed = ent:GetSequenceGroundSpeed(seq) or 0
+            local seqDur = ent:SequenceDuration(seq) or 0
             local spd = ent:GetVelocity():Length2D()
             local cls = ent:GetClass()
             local pos = ent:GetPos()
@@ -304,8 +307,8 @@ if CLIENT then
             local cycleInfo = string.format(" Cyc:%.2f", ent:GetCycle())
             local rateInfo = string.format(" Rate:%.2f", ent:GetPlaybackRate())
 
-            print(string.format("[DBG] %s[%d] Seq:%s Spd:%.1f Pos:%.1f SO:%.1f %s %s Off:%.1f Bl:%.1f Psh:%.1f Dom:%s Mn:%.1f Mx:%.1f%s%s%s",
-                cls, ent:EntIndex(), seqName, spd, pos.z, step, lStr, rStr, off, blend, push, dom, mn, mx, boneInfo, groundInfo, cycleInfo, rateInfo))
+            print(string.format("[DBG] %s[%d] Seq:%s Act:%d GS:%.1f Dur:%.2f Spd:%.1f Pos:%.1f SO:%.1f %s %s Off:%.1f Bl:%.1f Psh:%.1f Dom:%s Mn:%.1f Mx:%.1f%s%s%s",
+                cls, ent:EntIndex(), seqName, seqAct, groundSpeed, seqDur, spd, pos.z, step, lStr, rStr, off, blend, push, dom, mn, mx, boneInfo, groundInfo, cycleInfo, rateInfo))
         end
     end)
 

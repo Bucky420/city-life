@@ -390,13 +390,15 @@ function ENT:Draw()
 					if dt < past then past = dt; pastIdx = i end
 				end
 
-				if past < 0.12 then
-					local footName = (pastIdx % 2 == 1) and "left" or "right"
-					local footDist = footName == "left" and (self._LeftFootDist or 99) or (self._RightFootDist or 99)
-					local otherDist = footName == "left" and (self._RightFootDist or 99) or (self._LeftFootDist or 99)
-					if footDist < 12 and footDist < otherDist then
-						self._LockedDominant = footName
-					end
+			-- Only lock if going UP: foot ground above entity position
+			if past < 0.12 then
+				local footName = (pastIdx % 2 == 1) and "left" or "right"
+				local footDist = footName == "left" and (self._LeftFootDist or 99) or (self._RightFootDist or 99)
+				local otherDist = footName == "left" and (self._RightFootDist or 99) or (self._LeftFootDist or 99)
+				local footHitZ = footName == "left" and self._LeftFootHitZ or self._RightFootHitZ
+				if footDist < 12 and footDist < otherDist and footHitZ and footHitZ > pos.z then
+					self._LockedDominant = footName
+				end
 				end
 
 				if self._LockedDominant and past < 0.5 then

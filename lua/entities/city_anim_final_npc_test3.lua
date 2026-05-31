@@ -361,7 +361,7 @@ function ENT:Draw()
 		self._DbgBlendOff = math.Clamp(self._StepOrigin - pos.z, -stepHeight + bias, 0)
 
 		-- Foot push: raises entity when foot plants on higher ground (curb/stairs)
-		local targetPush = pos.z
+		local targetPush = pos.z + (self._DbgBlendOff or 0)
 		local dominantFoot = nil
 
 		-- Push: only when foot is on solid ground at entity level (short trace + HitZ near pos)
@@ -414,13 +414,10 @@ function ENT:Draw()
 			self._LastSequence = self:GetSequence()
 		end
 
-		if dominantFoot then
-			self._FootPush = Lerp(0.3, self._FootPush or pos.z, targetPush)
-			self._IkOffset = self._FootPush - pos.z
-		else
-			self._FootPush = pos.z
-			self._IkOffset = self._DbgBlendOff
-		end
+		-- Always lerp, never snap. Slow ramp up, faster fall back
+		local lerpRate = dominantFoot and 0.08 or 0.15
+		self._FootPush = Lerp(lerpRate, self._FootPush or pos.z, targetPush)
+		self._IkOffset = self._FootPush - pos.z
 		self._DominantFoot = dominantFoot
 
 		self._DbgMinZ = minGroundZ

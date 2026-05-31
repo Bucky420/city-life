@@ -79,6 +79,7 @@ function ENT:BodyUpdate()
 end
 
 function ENT:OnRemove()
+    self:ResolveModules()
     for _, mod in ipairs(self.Modules) do
         if mod.OnRemove then mod.OnRemove(self) end
     end

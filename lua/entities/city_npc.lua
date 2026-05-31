@@ -113,6 +113,7 @@ function ENT:OnRemove()
         end
     end
 
+    self:ResolveModules()
     for _, mod in ipairs(self.Modules) do
         if mod.OnRemove then mod.OnRemove(self) end
     end

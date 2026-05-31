@@ -12,13 +12,11 @@ ENT.Purpose = "Minimal follow NPC with SetIK(true)"
 ENT.Instructions = "Press +USE to recruit. Follows commander."
 
 local FOLLOW_STOP_DIST = 75
-local FOLLOW_START_DIST = 110
 local FOLLOW_RUN_DIST = 450
-local FOLLOW_LOST_DIST  = 30000
+local FOLLOW_LOST_DIST = 30000
 
 local FOLLOW_SPEED_WALK = 75
 local FOLLOW_SPEED_RUN = 150
-local FOLLOW_SPEED_IDLE = 30
 
 local TURN_GESTURE_COOLDOWN = 0.5
 local TURN_GESTURE_MIN_DELTA = 15
@@ -223,19 +221,12 @@ function ENT:Draw()
 	self:PrintAnimEvents()
 	local pos = self:GetPos()
 
-	-- SDK: entity position snaps to ground via locomotion, no smoothing
-	-- IK handles the rest. No forward prediction.
-
-	-- Step 1: Enable IK on client (server SetIK doesn't propagate to nextbot client entity)
 	self:SetIK(true)
-
-	-- SetupBones at ORIGINAL position to get true animated bone positions
 	self:SetupBones()
 
 	local lFootBone = self:LookupBone("ValveBiped.Bip01_L_Foot")
 	local rFootBone = self:LookupBone("ValveBiped.Bip01_R_Foot")
 
-	-- Get actual bone world positions using matrix (wiki: GetBonePosition can be stale)
 	local lFootRaw = nil
 	local rFootRaw = nil
 
@@ -248,21 +239,10 @@ function ENT:Draw()
 		if mat then rFootRaw = mat:GetTranslation() end
 	end
 
-	-- Smooth foot bone positions so IK targets change gradually
-	local lFootWorld = nil
-	local rFootWorld = nil
-	if lFootRaw then
-		self._SmoothLFoot = self._SmoothLFoot or lFootRaw
-		self._SmoothLFoot = Lerp(0.15, self._SmoothLFoot, lFootRaw)
-		lFootWorld = self._SmoothLFoot
-	end
-	if rFootRaw then
-		self._SmoothRFoot = self._SmoothRFoot or rFootRaw
-		self._SmoothRFoot = Lerp(0.15, self._SmoothRFoot, rFootRaw)
-		rFootWorld = self._SmoothRFoot
-	end
+	local lFootWorld = lFootRaw
+	local rFootWorld = rFootRaw
 
-	-- Step 2: Trace from each foot world position, track min AND max ground Z
+	-- Trace from each foot world position, track min AND max ground Z
 	local r = 2.5
 
 	local TRACE_DIST = 72
@@ -294,8 +274,7 @@ function ENT:Draw()
 		end
 		self._LeftFootLocalZ = lFootWorld.z - pos.z
 		if CityNPCs and CityNPCs.DbgEnts and CityNPCs.DbgEnts[self:EntIndex()] then
-			local isActive = math.abs(self._FootPush or 0) > 0.1 and self._DominantFoot == "left"
-			local col = isActive and Color(255, 128, 0) or Color(0, 255, 0)
+			local col = Color(0, 255, 0)
 			local endPos = lTr.Hit and lTr.HitPos or lEnd
 			debugoverlay.Cross(lStart, r, 0.01, col, true)
 			debugoverlay.Cross(endPos, r, 0.01, col, true)
@@ -333,8 +312,7 @@ function ENT:Draw()
 		end
 		self._RightFootLocalZ = rFootWorld.z - pos.z
 		if CityNPCs and CityNPCs.DbgEnts and CityNPCs.DbgEnts[self:EntIndex()] then
-			local isActive = math.abs(self._FootPush or 0) > 0.1 and self._DominantFoot == "right"
-			local col = isActive and Color(255, 128, 0) or Color(0, 255, 0)
+			local col = Color(0, 255, 0)
 			local endPos = rTr.Hit and rTr.HitPos or rEnd
 			debugoverlay.Cross(rStart, r, 0.01, col, true)
 			debugoverlay.Cross(endPos, r, 0.01, col, true)
@@ -347,22 +325,17 @@ function ENT:Draw()
 
 		local stepHeight = 18
 
-		-- Clamp ground to entity level - floor can never be above the entity
 		minGroundZ = math.min(minGroundZ, pos.z)
 		maxGroundZ = math.min(maxGroundZ, pos.z)
 
-		-- Smooth the raw trace Z before feeding to filter
 		self._SmoothMinZ = Lerp(0.15, self._SmoothMinZ or minGroundZ, minGroundZ)
 		self._SmoothMaxZ = Lerp(0.15, self._SmoothMaxZ or maxGroundZ, maxGroundZ)
 
-		-- SDK formula: floor tracks min ground with 0.2/0.8 filter
 		self._StepOrigin = self._StepOrigin * 0.2 + self._SmoothMinZ * 0.8
 
 		local bias = math.Clamp((self._SmoothMaxZ - self._SmoothMinZ) - stepHeight, 0, stepHeight)
 
 		self._DbgBlendOff = math.Clamp(self._StepOrigin - pos.z, -stepHeight + bias, 0)
-
-		-- Smooth the offset to reduce stair bob
 		self._SmoothOff = Lerp(0.15, self._SmoothOff or self._DbgBlendOff, self._DbgBlendOff)
 
 		if self._LastSequence ~= self:GetSequence() then
@@ -373,14 +346,12 @@ function ENT:Draw()
 		local dz = pos.z - (self._LastPosZ or pos.z)
 		self._LastPosZ = pos.z
 
-		-- When entity moves UP, shift _FootPush up so offset doesn't spike
 		if dz > 2 then
 			self._FootPush = (self._FootPush or pos.z) + dz
 		end
 
 		local lerpRate = dz > 0 and 0.05 or 0.08
 		self._FootPush = Lerp(lerpRate, self._FootPush, self._DbgBlendOff + pos.z)
-		self._DominantFoot = nil
 
 		self._DbgMinZ = minGroundZ
 		self._DbgMaxZ = maxGroundZ
@@ -393,10 +364,9 @@ function ENT:Draw()
 		self._SmoothMaxZ = nil
 	end
 
-	-- Step 4: Smooth Z position, then draw
+	-- Smooth Z position, then draw
 	local targetZ = pos.z + (self._SmoothOff or 0)
-	local vzDz = targetZ - (self._VisualZ or targetZ)
-	local vzRate = vzDz > 0 and 0.06 or 0.08
+	local vzRate = 0.08
 	self._VisualZ = Lerp(vzRate, self._VisualZ or targetZ, targetZ)
 	self:SetPos(Vector(pos.x, pos.y, self._VisualZ))
 	self:SetupBones()

@@ -186,9 +186,6 @@ end
 
 if CLIENT then
 
-function ENT:FireAnimationEvent(pos, ang, event, name)
-end
-
 function ENT:Draw()
 	local pos = self:GetPos()
 
@@ -210,21 +207,16 @@ function ENT:Draw()
 		if mat then rFootRaw = mat:GetTranslation() end
 	end
 
-	local lFootWorld = lFootRaw
-	local rFootWorld = rFootRaw
-
 	-- Trace from each foot world position, track min AND max ground Z
 	local r = 2.5
-
 	local TRACE_DIST = 72
 	local minGroundZ = nil
 	local maxGroundZ = nil
-
 	local fwd = self:GetForward()
 	local footForward = Vector(fwd.x, fwd.y, 0):GetNormalized() * 4
 
-	if lFootWorld then
-		local lStart = lFootWorld + footForward
+	if lFootRaw then
+		local lStart = lFootRaw + footForward
 		local lEnd = lStart - Vector(0, 0, TRACE_DIST)
 		local lTr = util.TraceHull({
 			start = lStart,
@@ -243,7 +235,7 @@ function ENT:Draw()
 			self._LeftFootDist = 99
 			self._LeftFootHitZ = nil
 		end
-		self._LeftFootLocalZ = lFootWorld.z - pos.z
+		self._LeftFootLocalZ = lFootRaw.z - pos.z
 		if CityNPCs and CityNPCs.DbgEnts and CityNPCs.DbgEnts[self:EntIndex()] then
 			local col = Color(0, 255, 0)
 			local endPos = lTr.Hit and lTr.HitPos or lEnd
@@ -253,8 +245,8 @@ function ENT:Draw()
 		end
 	end
 
-	if rFootWorld then
-		local rStart = rFootWorld + footForward
+	if rFootRaw then
+		local rStart = rFootRaw + footForward
 		local rEnd = rStart - Vector(0, 0, TRACE_DIST)
 		local rTr = util.TraceHull({
 			start = rStart,
@@ -281,7 +273,7 @@ function ENT:Draw()
 			self._RightFootDist = 99
 			self._RightFootHitZ = nil
 		end
-		self._RightFootLocalZ = rFootWorld.z - pos.z
+		self._RightFootLocalZ = rFootRaw.z - pos.z
 		if CityNPCs and CityNPCs.DbgEnts and CityNPCs.DbgEnts[self:EntIndex()] then
 			local col = Color(0, 255, 0)
 			local endPos = rTr.Hit and rTr.HitPos or rEnd

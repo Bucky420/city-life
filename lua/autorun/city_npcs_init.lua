@@ -1,8 +1,20 @@
 include("city_npcs/nav_metadata.lua")
 
+-- Load modules (shared, needed before entities reference them)
+include("entities/modules/move.lua")
+include("entities/modules/z.lua")
+include("entities/modules/turn.lua")
+include("entities/modules/life.lua")
+ 
 list.Set("NPC", "city_npc", {
-    Name = "City NPC",
+    Name = "City NPC", 
     Class = "city_npc",
+    Category = "Citizens"
+})
+
+list.Set("NPC", "city_npc_follow", {
+    Name = "City NPC (Follow)",
+    Class = "city_npc_follow",
     Category = "Citizens"
 })
 
@@ -33,6 +45,10 @@ list.Set("NPC", "city_anim_test04_player", {
 if SERVER then
     AddCSLuaFile("city_npcs/nav_metadata.lua")
     AddCSLuaFile("city_npcs/cl_ui.lua")
+    AddCSLuaFile("entities/modules/move.lua")
+    AddCSLuaFile("entities/modules/z.lua")
+    AddCSLuaFile("entities/modules/turn.lua")
+    AddCSLuaFile("entities/modules/life.lua")
 
     include("city_npcs/navigation.lua")
     AddCSLuaFile("city_npcs/navigation.lua")
@@ -115,6 +131,15 @@ if SERVER then
         timer.Simple(1, CityNPCs.TagNavMesh)
     end)
 
+    local cityNpcClasses = {
+        ["city_npc"] = true,
+        ["city_npc_follow"] = true,
+        ["city_anim_test_npc"] = true,
+        ["city_anim_test02_npc"] = true,
+        ["city_anim_final_npc_test3"] = true,
+        ["city_anim_test04_player"] = true,
+    }
+
     concommand.Remove("citynpc_spawn")
     concommand.Add("citynpc_spawn", function(ply, _, args)
         if IsValid(ply) and not ply:IsAdmin() then
@@ -156,6 +181,12 @@ if SERVER then
                 count = count + 1
             end
         end
+        for _, ent in ipairs(ents.FindByClass("city_npc_follow")) do
+            if IsValid(ent) then
+                ent:Remove()
+                count = count + 1
+            end
+        end
         local msg = "[CityNPCs] Removed " .. count .. " NPCs"
         if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, msg) end
         print(msg)
@@ -165,12 +196,11 @@ if SERVER then
     concommand.Add("citynpc_dump_pose", function(ply)
         local target = ply:GetEyeTrace().Entity
         local cls = IsValid(target) and target:GetClass() or ""
-local allowedClasses = { ["city_npc"] = true, ["city_anim_test_npc"] = true, ["city_anim_test02_npc"] = true, ["city_anim_final_npc_test3"] = true, ["city_anim_test04_player"] = true }
-            if not allowedClasses[cls] then
-                if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "[CityNPCs] Look at a city_npc / city_anim_test_npc / city_anim_test02_npc / city_anim_test04_player") end
-                return
-            end
-            local n = target:GetNumPoseParameters()
+        if not cityNpcClasses[cls] then
+            if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "[CityNPCs] Look at a city NPC entity") end
+            return
+        end
+        local n = target:GetNumPoseParameters()
         if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "--- Pose Params (" .. n .. ") ---") end
         for i = 0, n - 1 do
             local name = target:GetPoseParameterName(i)
@@ -185,9 +215,8 @@ local allowedClasses = { ["city_npc"] = true, ["city_anim_test_npc"] = true, ["c
     concommand.Add("citynpc_dump_anims", function(ply)
         local target = ply:GetEyeTrace().Entity
         local cls = IsValid(target) and target:GetClass() or ""
-        local allowedClasses = { ["city_npc"] = true, ["city_anim_test_npc"] = true, ["city_anim_test02_npc"] = true, ["city_anim_final_npc_test3"] = true, ["city_anim_test04_player"] = true }
-        if not allowedClasses[cls] then
-            if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "[CityNPCs] Look at a city_npc / city_anim_test_npc / city_anim_test02_npc / city_anim_test04_player") end
+        if not cityNpcClasses[cls] then
+            if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "[CityNPCs] Look at a city NPC entity") end
             return
         end
         local count = target:GetSequenceCount()
@@ -294,7 +323,6 @@ if CLIENT then
             local mx = ent._DbgMaxZ or 0
             local step = ent._StepOrigin or pos.z
 
-            -- Extra info for stock NPCs: bone world Z, ground entity, cycle
             local boneInfo = ""
             if pelvisBone and pelvisBone >= 0 then
                 local mat = ent:GetBoneMatrix(pelvisBone)

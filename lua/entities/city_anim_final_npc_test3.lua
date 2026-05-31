@@ -48,7 +48,6 @@ function ENT:Initialize()
 
 	self.Commander = nil
 	self.NextTurnTime = 0
-	self._DesiredSpeed = 0
 end
 
 function ENT:BodyUpdate()
@@ -113,7 +112,6 @@ function ENT:RunBehaviour()
 			end
 
 		if dist > FOLLOW_STOP_DIST then
-				self._DesiredSpeed = 0
 
 				local toTarget = (cmdPos - self:GetPos()):GetNormalized()
 				self.loco:FaceTowards(cmdPos)
@@ -128,7 +126,6 @@ function ENT:RunBehaviour()
 					self._LastMovePrint = CurTime()
 					print(self:GetClass() .. " [" .. self:EntIndex() .. "] moving to " .. self.Commander:Nick())
 				end
-				self._DesiredSpeed = FOLLOW_SPEED_WALK
 				self.loco:SetDesiredSpeed(FOLLOW_SPEED_WALK)
 
 				local stuckPos = self:GetPos()
@@ -145,9 +142,8 @@ function ENT:RunBehaviour()
 						break
 					end
 
-					self._DesiredSpeed = (dist > FOLLOW_RUN_DIST and FOLLOW_SPEED_RUN) or
-						FOLLOW_SPEED_WALK
-					self.loco:SetDesiredSpeed(self._DesiredSpeed)
+					self.loco:SetDesiredSpeed((dist > FOLLOW_RUN_DIST and FOLLOW_SPEED_RUN) or
+						FOLLOW_SPEED_WALK)
 
 					if self:GetPos():Distance(stuckPos) < 8 then
 						stuckTime = stuckTime + FrameTime()
@@ -171,11 +167,9 @@ function ENT:RunBehaviour()
 					coroutine.yield()
 				end
 			else
-				self._DesiredSpeed = 0
 				coroutine.wait(1)
 			end
 		else
-			self._DesiredSpeed = 0
 			self.Commander = nil
 			coroutine.wait(1)
 		end

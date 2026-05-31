@@ -189,36 +189,7 @@ if CLIENT then
 function ENT:FireAnimationEvent(pos, ang, event, name)
 end
 
-function ENT:PrintAnimEvents()
-	if self._EventsPrinted then return end
-	self._EventsPrinted = true
-
-	local mdl = self:GetModel()
-	local info = util.GetModelInfo(mdl)
-	if not info or not info.Sequences then return end
-
-	self._PlantCycles = {}
-
-	print("=== Animation Events for " .. mdl .. " ===")
-
-	for _, seq in ipairs(info.Sequences) do
-		if seq.Events and #seq.Events > 0 then
-			print(string.format("  Seq: %s (act: %s)", seq.Name, seq.Activity or "?"))
-			for _, ev in ipairs(seq.Events) do
-				print(string.format("    Cycle: %.4f  Event: %d  Name: %s  Type: %d",
-					ev.Cycle, ev.Event, ev.Name or "?", ev.Type or 0))
-				if ev.Event == 6006 or ev.Event == 6007 then
-					self._PlantCycles[#self._PlantCycles + 1] = ev.Cycle
-				end
-			end
-		end
-	end
-
-	print("=== End Animation Events ===")
-end
-
 function ENT:Draw()
-	self:PrintAnimEvents()
 	local pos = self:GetPos()
 
 	self:SetIK(true)
@@ -337,21 +308,6 @@ function ENT:Draw()
 
 		self._DbgBlendOff = math.Clamp(self._StepOrigin - pos.z, -stepHeight + bias, 0)
 		self._SmoothOff = Lerp(0.15, self._SmoothOff or self._DbgBlendOff, self._DbgBlendOff)
-
-		if self._LastSequence ~= self:GetSequence() then
-			self._FootPush = pos.z
-			self._LastSequence = self:GetSequence()
-		end
-
-		local dz = pos.z - (self._LastPosZ or pos.z)
-		self._LastPosZ = pos.z
-
-		if dz > 2 then
-			self._FootPush = (self._FootPush or pos.z) + dz
-		end
-
-		local lerpRate = dz > 0 and 0.05 or 0.08
-		self._FootPush = Lerp(lerpRate, self._FootPush, self._DbgBlendOff + pos.z)
 
 		self._DbgMinZ = minGroundZ
 		self._DbgMaxZ = maxGroundZ

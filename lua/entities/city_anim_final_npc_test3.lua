@@ -375,7 +375,7 @@ function ENT:Draw()
 		local pushScale = math.Clamp(1 - groundDiff / 16, 0, 1)
 		local lOnGround = self._LeftFootHitZ and (self._LeftFootDist or 99) < 6 and math.abs(self._LeftFootHitZ - pos.z) < 3
 		local rOnGround = self._RightFootHitZ and (self._RightFootDist or 99) < 6 and math.abs(self._RightFootHitZ - pos.z) < 3
-		local needsPush = false and (lOnGround or rOnGround) and pushScale > 0 and string.find(self:GetSequenceName(self:GetSequence()), "walk") ~= nil
+		local needsPush = (lOnGround or rOnGround) and pushScale > 0 and string.find(self:GetSequenceName(self:GetSequence()), "walk") ~= nil
 
 		if needsPush then
 			local plantCycles = self._PlantCycles
@@ -453,9 +453,9 @@ function ENT:Draw()
 	end
 
 	-- Step 4: Smooth Z position, then draw
-	local targetZ = pos.z + (self._SmoothOff or 0)
+	local targetZ = dominantFoot and (self._FootPush or pos.z) or (pos.z + (self._SmoothOff or 0))
 	local vzDz = targetZ - (self._VisualZ or targetZ)
-	local vzRate = 0.05
+	local vzRate = 0.4
 	self._VisualZ = Lerp(vzRate, self._VisualZ or targetZ, targetZ)
 	self:SetPos(Vector(pos.x, pos.y, self._VisualZ))
 	self:SetupBones()

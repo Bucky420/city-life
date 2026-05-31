@@ -365,68 +365,11 @@ function ENT:Draw()
 		-- Smooth the offset to reduce stair bob
 		self._SmoothOff = Lerp(0.15, self._SmoothOff or self._DbgBlendOff, self._DbgBlendOff)
 
-		-- Foot push: raises entity when foot plants on higher ground (curb/stairs)
-		local targetPush = pos.z + (self._SmoothOff or 0)
-		local dominantFoot = nil
-
-		-- Push: only when foot is on solid ground at entity level (short trace + HitZ near pos)
-		-- Scale push strength by ground diff — less push on stairs, full push on flat
-		local groundDiff = math.abs((self._SmoothMaxZ or pos.z) - (self._SmoothMinZ or pos.z))
-		local pushScale = math.Clamp(1 - groundDiff / 16, 0, 1)
-		local lOnGround = self._LeftFootHitZ and (self._LeftFootDist or 99) < 6 and math.abs(self._LeftFootHitZ - pos.z) < 3
-		local rOnGround = self._RightFootHitZ and (self._RightFootDist or 99) < 6 and math.abs(self._RightFootHitZ - pos.z) < 3
-		local needsPush = (lOnGround or rOnGround) and pushScale > 0 and string.find(self:GetSequenceName(self:GetSequence()), "walk") ~= nil
-
-		if needsPush then
-			local plantCycles = self._PlantCycles
-			if plantCycles and #plantCycles > 0 then
-				local cycle = self:GetCycle()
-				local past = 1
-				local pastIdx = 1
-				local pre = 1
-				for i = 1, #plantCycles do
-					local dtPast = (cycle - plantCycles[i]) % 1
-					local dtPre = (plantCycles[i] - cycle) % 1
-					if dtPast < past then past = dtPast; pastIdx = i end
-					if dtPre < pre then pre = dtPre end
-				end
-
-				if pre < 0.12 then
-					local footName = (pastIdx % 2 == 1) and "left" or "right"
-					self._LockedDominant = footName
-				end
-
-				local blendWeight = 0
-				if pre < 0.08 then
-					blendWeight = 1 - (pre / 0.08)
-				elseif pre < 0.4 then
-					blendWeight = 1
-				elseif pre < 0.5 then
-					blendWeight = 1 - ((pre - 0.4) / 0.1)
-				end
-
-				if self._LockedDominant and blendWeight > 0 then
-					dominantFoot = self._LockedDominant
-					local footHitZ = dominantFoot == "left" and self._LeftFootHitZ or self._RightFootHitZ
-					local footDist = dominantFoot == "left" and (self._LeftFootDist or 99) or (self._RightFootDist or 99)
-					if footHitZ and footDist < 6 then
-						-- Brake: lerp offset toward 0 over stance phase
-						targetPush = pos.z
-					end
-				else
-					self._LockedDominant = nil
-				end
-			end
-		else
-			self._LockedDominant = nil
-		end
-
 		if self._LastSequence ~= self:GetSequence() then
 			self._FootPush = pos.z
 			self._LastSequence = self:GetSequence()
 		end
 
-		-- Smooth lerp: carry offset up with entity jumps, lerp toward target
 		local dz = pos.z - (self._LastPosZ or pos.z)
 		self._LastPosZ = pos.z
 
@@ -436,9 +379,8 @@ function ENT:Draw()
 		end
 
 		local lerpRate = dz > 0 and 0.05 or 0.08
-		self._FootPush = Lerp(lerpRate, self._FootPush, targetPush)
-		self._IkOffset = self._FootPush - pos.z
-		self._DominantFoot = dominantFoot
+		self._FootPush = Lerp(lerpRate, self._FootPush, self._DbgBlendOff + pos.z)
+		self._DominantFoot = nil
 
 		self._DbgMinZ = minGroundZ
 		self._DbgMaxZ = maxGroundZ
@@ -447,15 +389,14 @@ function ENT:Draw()
 		self._DbgMinZ = pos.z
 		self._DbgMaxZ = pos.z
 		self._StepOrigin = pos.z
-		self._IkOffset = (self._IkOffset or 0) * 0.5
 		self._SmoothMinZ = nil
 		self._SmoothMaxZ = nil
 	end
 
 	-- Step 4: Smooth Z position, then draw
-	local targetZ = dominantFoot and (self._FootPush or pos.z) or (pos.z + (self._SmoothOff or 0))
+	local targetZ = pos.z + (self._SmoothOff or 0)
 	local vzDz = targetZ - (self._VisualZ or targetZ)
-	local vzRate = 0.4
+	local vzRate = vzDz > 0 and 0.06 or 0.08
 	self._VisualZ = Lerp(vzRate, self._VisualZ or targetZ, targetZ)
 	self:SetPos(Vector(pos.x, pos.y, self._VisualZ))
 	self:SetupBones()

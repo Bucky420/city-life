@@ -51,7 +51,8 @@ function ENT:BodyUpdate()
     if not SERVER then return end
     local vel = self.loco:GetVelocity():Length2D()
     local act = self:GetActivity()
-
+                    self.loco:SetAcceleration(200)
+                    self.loco:SetDesiredSpeed(20)
     local isIdle = vel < 5
     self:SetNWBool("PlantFeet", isIdle)
     if vel > 120 then
@@ -118,6 +119,7 @@ function ENT:RunBehaviour()
             if dist > FOLLOW_STOP_DIST then
                 local speed = dist > FOLLOW_RUN_DIST and 350 or (dist > FOLLOW_START_DIST and 100 or 60)
                 self.loco:SetDesiredSpeed(speed)
+
                 while dist > FOLLOW_STOP_DIST do
                     cmdPos = self.Commander:GetPos()
                     dist = self:GetPos():Distance(cmdPos)

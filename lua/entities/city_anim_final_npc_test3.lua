@@ -16,9 +16,9 @@ local FOLLOW_START_DIST = 110
 local FOLLOW_RUN_DIST = 450
 local FOLLOW_LOST_DIST  = 30000
 
-local FOLLOW_SPEED_WALK = 30
-local FOLLOW_SPEED_RUN = 50
-local FOLLOW_SPEED_IDLE = 5
+local FOLLOW_SPEED_WALK = 75
+local FOLLOW_SPEED_RUN = 150
+local FOLLOW_SPEED_IDLE = 30
 
 local TURN_GESTURE_COOLDOWN = 0.5
 local TURN_GESTURE_MIN_DELTA = 15
@@ -40,8 +40,8 @@ function ENT:Initialize()
 
 	self:SetUseType(SIMPLE_USE)
 
-	self.loco:SetDesiredSpeed(50)
-	self.loco:SetAcceleration(100)
+	self.loco:SetDesiredSpeed(150)
+	self.loco:SetAcceleration(200)
 	self.loco:SetDeceleration(200)
 	self.loco:SetStepHeight(18)
 	self.loco:SetMaxYawRate(180)
@@ -56,32 +56,15 @@ end
 function ENT:BodyUpdate()
 	local act = self:GetActivity()
 	local speed = self.loco:GetVelocity():Length2D()
-	local wantMove = speed > 3
+	local wantMove = speed > 20
 
 	local newAct = wantMove and ACT_WALK or ACT_IDLE
 
 	if newAct ~= act and newAct then
-		local cycle
-		if act == ACT_IDLE and newAct == ACT_WALK then
-			cycle = self:GetCycle()
-		end
 		self:StartActivity(newAct)
-		if cycle then
-			self:SetCycle(cycle)
-		end
-	end
-
-	-- SDK-style speed scaling on stairs: slow animation when feet are at different heights
-	local groundDiff = math.abs((self._SmoothMaxZ or 0) - (self._SmoothMinZ or 0))
-	local stairScale = 1.0
-	if groundDiff > 1 then
-		stairScale = math.Clamp(1.1 - groundDiff / 16, 0.5, 1.0)
 	end
 
 	self:BodyMoveXY()
-
-	-- Apply AFTER BodyMoveXY so it doesn't get overridden
-	self:SetPlaybackRate(stairScale)
 end
 
 function ENT:AcceptInput(name, activator)
@@ -131,15 +114,15 @@ function ENT:RunBehaviour()
 				continue
 			end
 
-			if dist > FOLLOW_STOP_DIST then
-				self._DesiredSpeed = 1
+		if dist > FOLLOW_STOP_DIST then
+				self._DesiredSpeed = 0
 
 				local toTarget = (cmdPos - self:GetPos()):GetNormalized()
 				self.loco:FaceTowards(cmdPos)
 				local faceStart = CurTime()
-				while self:GetForward():Dot(toTarget) < 0.95 and CurTime() - faceStart < 2 do
+				while self:GetForward():Dot(toTarget) < 0.9 and CurTime() - faceStart < 0.5 do
 					toTarget = (cmdPos - self:GetPos()):GetNormalized()
-					self.loco:FaceTowards(cmdPos) 
+					self.loco:FaceTowards(cmdPos)
 					coroutine.yield()
 				end
 
@@ -147,10 +130,8 @@ function ENT:RunBehaviour()
 					self._LastMovePrint = CurTime()
 					print(self:GetClass() .. " [" .. self:EntIndex() .. "] moving to " .. self.Commander:Nick())
 				end
-				self._DesiredSpeed = (dist > FOLLOW_RUN_DIST and FOLLOW_SPEED_RUN) or
-					(dist > FOLLOW_START_DIST and FOLLOW_SPEED_WALK) or
-					FOLLOW_SPEED_IDLE
-				self.loco:SetDesiredSpeed(self._DesiredSpeed)
+				self._DesiredSpeed = FOLLOW_SPEED_WALK
+				self.loco:SetDesiredSpeed(FOLLOW_SPEED_WALK)
 
 				local stuckPos = self:GetPos()
 				local stuckTime = 0
@@ -165,6 +146,10 @@ function ENT:RunBehaviour()
 					if dist <= FOLLOW_STOP_DIST then
 						break
 					end
+
+					self._DesiredSpeed = (dist > FOLLOW_RUN_DIST and FOLLOW_SPEED_RUN) or
+						FOLLOW_SPEED_WALK
+					self.loco:SetDesiredSpeed(self._DesiredSpeed)
 
 					if self:GetPos():Distance(stuckPos) < 8 then
 						stuckTime = stuckTime + FrameTime()
@@ -224,7 +209,7 @@ function ENT:PrintAnimEvents()
 			for _, ev in ipairs(seq.Events) do
 				print(string.format("    Cycle: %.4f  Event: %d  Name: %s  Type: %d",
 					ev.Cycle, ev.Event, ev.Name or "?", ev.Type or 0))
-				if seq.Name == "walk_all" and (ev.Event == 6006 or ev.Event == 6007) then
+				if ev.Event == 6006 or ev.Event == 6007 then
 					self._PlantCycles[#self._PlantCycles + 1] = ev.Cycle
 				end
 			end
@@ -308,7 +293,7 @@ function ENT:Draw()
 			self._LeftFootHitZ = nil
 		end
 		if CityNPCs and CityNPCs.DbgEnts and CityNPCs.DbgEnts[self:EntIndex()] then
-			local isActive = math.abs(self._FootPush or 0) > 0.5 and self._DominantFoot == "left"
+			local isActive = math.abs(self._FootPush or 0) > 0.1 and self._DominantFoot == "left"
 			local col = isActive and Color(255, 128, 0) or Color(0, 255, 0)
 			local endPos = lTr.Hit and lTr.HitPos or lEnd
 			debugoverlay.Cross(lStart, r, 0.01, col, true)
@@ -346,7 +331,7 @@ function ENT:Draw()
 			self._RightFootHitZ = nil
 		end
 		if CityNPCs and CityNPCs.DbgEnts and CityNPCs.DbgEnts[self:EntIndex()] then
-			local isActive = math.abs(self._FootPush or 0) > 0.5 and self._DominantFoot == "right"
+			local isActive = math.abs(self._FootPush or 0) > 0.1 and self._DominantFoot == "right"
 			local col = isActive and Color(255, 128, 0) or Color(0, 255, 0)
 			local endPos = rTr.Hit and rTr.HitPos or rEnd
 			debugoverlay.Cross(rStart, r, 0.01, col, true)
@@ -373,15 +358,18 @@ function ENT:Draw()
 
 		local bias = math.Clamp((self._SmoothMaxZ - self._SmoothMinZ) - stepHeight, 0, stepHeight)
 
-		-- Going DOWN: small offset so IK has room to pull feet to ground
-		-- Going UP: full offset to match lower foot level
 		self._DbgBlendOff = math.Clamp(self._StepOrigin - pos.z, -stepHeight + bias, 0)
 
-		-- Foot push: raises root motion Z when foot plants on higher ground
-		local PUSH_STRENGTH = 0.5
-		local targetPush = 0
+		-- Foot push: raises entity when foot plants on higher ground (curb/stairs)
+		local targetPush = pos.z
 		local dominantFoot = nil
-		if self._DbgBlendOff < -1 and self:GetSequenceName(self:GetSequence()) == "walk_all" then
+
+		-- Push: only when foot is on solid ground at entity level (short trace + HitZ near pos)
+		local lOnGround = self._LeftFootHitZ and (self._LeftFootDist or 99) < 6 and math.abs(self._LeftFootHitZ - pos.z) < 3
+		local rOnGround = self._RightFootHitZ and (self._RightFootDist or 99) < 6 and math.abs(self._RightFootHitZ - pos.z) < 3
+		local needsPush = (lOnGround or rOnGround) and string.find(self:GetSequenceName(self:GetSequence()), "walk") ~= nil
+
+		if needsPush then
 			local plantCycles = self._PlantCycles
 			if plantCycles and #plantCycles > 0 then
 				local cycle = self:GetCycle()
@@ -392,22 +380,27 @@ function ENT:Draw()
 					if dt < past then past = dt; pastIdx = i end
 				end
 
-			-- Only lock if going UP: foot ground above entity position
-			if past < 0.12 then
-				local footName = (pastIdx % 2 == 1) and "left" or "right"
-				local footDist = footName == "left" and (self._LeftFootDist or 99) or (self._RightFootDist or 99)
-				local otherDist = footName == "left" and (self._RightFootDist or 99) or (self._LeftFootDist or 99)
-				local footHitZ = footName == "left" and self._LeftFootHitZ or self._RightFootHitZ
-				if footDist < 12 and footDist < otherDist and footHitZ and footHitZ > pos.z then
+				if past < 0.12 then
+					local footName = (pastIdx % 2 == 1) and "left" or "right"
 					self._LockedDominant = footName
 				end
+
+				local blendWeight = 0
+				if past < 0.08 then
+					blendWeight = 1 - (past / 0.08)
+				elseif past < 0.4 then
+					blendWeight = 1
+				elseif past < 0.5 then
+					blendWeight = 1 - ((past - 0.4) / 0.1)
 				end
 
-				if self._LockedDominant and past < 0.5 then
+				if self._LockedDominant and blendWeight > 0 then
 					dominantFoot = self._LockedDominant
 					local footHitZ = dominantFoot == "left" and self._LeftFootHitZ or self._RightFootHitZ
-					local pushHeight = math.max((footHitZ or 0) - pos.z, 0)
-					targetPush = pushHeight * PUSH_STRENGTH
+					local footDist = dominantFoot == "left" and (self._LeftFootDist or 99) or (self._RightFootDist or 99)
+					if footHitZ and footDist < 6 then
+						targetPush = Lerp(blendWeight, pos.z, footHitZ)
+					end
 				else
 					self._LockedDominant = nil
 				end
@@ -417,13 +410,17 @@ function ENT:Draw()
 		end
 
 		if self._LastSequence ~= self:GetSequence() then
-			self._FootPush = 0
+			self._FootPush = pos.z
 			self._LastSequence = self:GetSequence()
 		end
 
-		-- Push subtracts from offset: offset * (1 - push) makes entity higher
-		self._FootPush = Lerp(0.08, self._FootPush or 0, targetPush)
-		self._IkOffset = self._DbgBlendOff * (1 - self._FootPush)
+		if dominantFoot then
+			self._FootPush = Lerp(0.3, self._FootPush or pos.z, targetPush)
+			self._IkOffset = self._FootPush - pos.z
+		else
+			self._FootPush = pos.z
+			self._IkOffset = self._DbgBlendOff
+		end
 		self._DominantFoot = dominantFoot
 
 		self._DbgMinZ = minGroundZ

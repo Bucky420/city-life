@@ -421,16 +421,17 @@ function ENT:Draw()
 			self._LastSequence = self:GetSequence()
 		end
 
-		-- Snap only on step-UP (entity rises), lerp through step-DOWN
+		-- Smooth lerp: carry offset up with entity jumps, lerp toward target
 		local dz = pos.z - (self._LastPosZ or pos.z)
-		if dz > 2 then
-			self._FootPush = pos.z
-		end
 		self._LastPosZ = pos.z
 
-		-- Lerp toward target: faster going UP (entity jumped), slower going DOWN
-		local lerpRate = dz > 0 and 0.3 or 0.1
-		self._FootPush = Lerp(lerpRate, self._FootPush or pos.z, targetPush)
+		-- When entity moves UP, shift _FootPush up so offset doesn't spike
+		if dz > 2 then
+			self._FootPush = (self._FootPush or pos.z) + dz
+		end
+
+		local lerpRate = dz > 0 and 0.05 or 0.08
+		self._FootPush = Lerp(lerpRate, self._FootPush, targetPush)
 		self._IkOffset = self._FootPush - pos.z
 		self._DominantFoot = dominantFoot
 

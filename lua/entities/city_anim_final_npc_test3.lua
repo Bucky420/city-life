@@ -455,7 +455,7 @@ function ENT:Draw()
 	-- Step 4: Smooth Z position, then draw
 	local targetZ = pos.z + (self._SmoothOff or 0)
 	local vzDz = targetZ - (self._VisualZ or targetZ)
-	local vzRate = vzDz > 0 and 0.4 or 0.1
+	local vzRate = 0.05
 	self._VisualZ = Lerp(vzRate, self._VisualZ or targetZ, targetZ)
 	self:SetPos(Vector(pos.x, pos.y, self._VisualZ))
 	self:SetupBones()

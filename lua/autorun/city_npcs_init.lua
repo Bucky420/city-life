@@ -354,5 +354,29 @@ if CLIENT then
         end
     end)
 
+    concommand.Remove("citynpc_debug_flexes")
+    concommand.Add("citynpc_debug_flexes", function()
+        local target = LocalPlayer():GetEyeTrace().Entity
+        if not IsValid(target) then
+            print("[CityNPCs] Look at an entity first")
+            return
+        end
+        local n = target:GetFlexNum()
+        if not n or n == 0 then
+            print("[CityNPCs] Entity has no flex controllers")
+            return
+        end
+        print("[CityNPCs] --- Flex Controllers (" .. n .. ") on " .. target:GetClass() .. " ---")
+        for i = 0, n - 1 do
+            local name = target:GetFlexName(i)
+            local w = target:GetFlexWeight(i)
+            local t = target:GetFlexType(i)
+            if name and name ~= "" then
+                print(string.format("  [%d] %s  type=%s  weight=%.3f", i, name, t or "?", w or 0))
+            end
+        end
+        print("[CityNPCs] --- End ---")
+    end)
+
     print("[CityNPCs] Client loaded")
 end

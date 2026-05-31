@@ -74,7 +74,7 @@ local HEAD_TURN_SPEED = 4
 local AMBIENT_MIN_INTERVAL = 8
 local AMBIENT_MAX_INTERVAL = 25
 
--- CLIENT ONLY: Full face animation (head, eyes, brows, mouth, blink)
+-- CLIENT ONLY: Full face animation via flex controllers
 function Mod.Think(ent)
     local headBone = ent:LookupBone(HEAD_BONE)
     if not headBone or headBone < 0 then return end
@@ -83,6 +83,24 @@ function Mod.Think(ent)
     local headMat = ent:GetBoneMatrix(headBone)
     if not headMat then return end
     local headPos = headMat:GetTranslation()
+
+    -- Lazily cache flex IDs on first Think
+    if not ent._FlexCache then
+        ent._FlexCache = {}
+        for _, name in ipairs({ "blink", "half_closed", "right_inner_raiser", "left_inner_raiser", "right_lowerer", "left_lowerer", "jaw_drop", "smile" }) do
+            local id = ent:GetFlexIDByName(name)
+            if id then
+                ent._FlexCache[name] = id
+            end
+        end
+    end
+
+    local function setFlex(name, weight)
+        local id = ent._FlexCache[name]
+        if id then
+            ent:SetFlexWeight(id, weight)
+        end
+    end
 
     local lookTarget
     local nearestDist = 800
@@ -107,24 +125,21 @@ function Mod.Think(ent)
         lookTarget.z = headPos.z
     end
 
-    -- Head rotation
+    -- Head rotation (pose parameters for bone blending)
     local dir = (lookTarget - headPos):GetNormalized()
     local ang = dir:Angle()
-
     local targetYaw = math.Clamp(math.AngleDifference(ang.y, ent:GetAngles().y), -HEAD_YAW_LIMIT, HEAD_YAW_LIMIT)
     local targetPitch = math.Clamp(math.AngleDifference(ang.p, ent:GetAngles().p), -HEAD_PITCH_LIMIT, HEAD_PITCH_LIMIT)
-
     local rate = FrameTime() * HEAD_TURN_SPEED
     ent._HeadYaw = Lerp(rate, ent._HeadYaw or 0, targetYaw)
     ent._HeadPitch = Lerp(rate, ent._HeadPitch or 0, targetPitch)
     ent:SetPoseParameter("head_yaw", ent._HeadYaw)
     ent:SetPoseParameter("head_pitch", ent._HeadPitch)
 
-    -- Eye tracking via SetEyeTarget (engine handles flex controllers)
+    -- Eye tracking via SetEyeTarget (engine handles eye flex controllers)
     if hasTarget then
         ent:SetEyeTarget(lookTarget)
     else
-        -- Random saccades when no target
         if CurTime() > (ent._NextEyeSaccade or 0) then
             ent._NextEyeSaccade = CurTime() + math.random() * (EYE_SACCADE_MAX - EYE_SACCADE_MIN) + EYE_SACCADE_MIN
             ent._EyeSaccadeTarget = ent._EyeSaccadeTarget or myPos
@@ -137,39 +152,38 @@ function Mod.Think(ent)
         end
     end
 
-    -- Blinking
+    -- Blinking (via flex)
     if CurTime() > (ent._NextBlink or 0) then
         ent._NextBlink = CurTime() + math.random() * (BLINK_MAX - BLINK_MIN) + BLINK_MIN
         ent._BlinkUntil = CurTime() + 0.12
     end
-
     if ent._BlinkUntil and CurTime() < ent._BlinkUntil then
         local t = (ent._BlinkUntil - CurTime()) / 0.12
-        local lid = math.abs(t - 0.5) * 2
-        lid = 1 - lid
-        ent:SetPoseParameter("eye_lid_open", lid)
+        setFlex("blink", 1 - math.abs(t - 0.5) * 2)
     else
-        ent:SetPoseParameter("eye_lid_open", 0)
+        setFlex("blink", 0)
     end
 
-    -- Eyebrows (random subtle movement)
+    -- Eyebrows (via flex)
     if CurTime() > (ent._NextBrowChange or 0) then
         ent._NextBrowChange = CurTime() + math.random() * (BROW_MAX - BROW_MIN) + BROW_MIN
-        ent._BrowTarget = (math.random() * 0.8 - 0.2)
-        ent._BrowAngryTarget = math.random() * 0.3
+        ent._BrowTarget = (math.random() * 2 - 1) * 2
     end
-
     local browRate = FrameTime() * 3
     ent._BrowSmooth = Lerp(browRate, ent._BrowSmooth or 0, ent._BrowTarget or 0)
-    ent._BrowAngrySmooth = Lerp(browRate, ent._BrowAngrySmooth or 0, ent._BrowAngryTarget or 0)
-    ent:SetPoseParameter("eyebrow_up_down", ent._BrowSmooth)
-    ent:SetPoseParameter("eyebrow_angry", ent._BrowAngrySmooth)
+    local raise = math.max(0, ent._BrowSmooth)
+    local lower = math.max(0, -ent._BrowSmooth)
+    setFlex("right_inner_raiser", raise)
+    setFlex("left_inner_raiser", raise)
+    setFlex("right_lowerer", lower)
+    setFlex("left_lowerer", lower)
 
-    -- Mouth animation
+    -- Mouth animation (via flex)
     if ent:GetNWFloat("TalkingUntil", 0) > CurTime() then
-        ent:SetPoseParameter("mouth_open", (math.sin(CurTime() * 15) * 0.5 + 0.5) * 0.6)
+        local talk = math.sin(CurTime() * 15) * 0.5 + 0.5
+        setFlex("jaw_drop", talk * 0.5)
     else
-        ent:SetPoseParameter("mouth_open", 0)
+        setFlex("jaw_drop", 0)
     end
 end
 

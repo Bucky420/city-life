@@ -289,6 +289,7 @@ if CLIENT then
             local pos = ent:GetPos()
             local off = ent._IkOffset or 0
             local blend = ent._DbgBlendOff or 0
+            local smoothOff = ent._SmoothOff or 0
             local push = ent._FootPush or 0
             local dom = ent._DominantFoot or "none"
             local mn = ent._DbgMinZ or 0
@@ -322,8 +323,8 @@ if CLIENT then
                 end
             end
 
-            print(string.format("[DBG] %s[%d] Seq:%s Act:%d GS:%.1f Dur:%.2f Spd:%.1f Pos:%.1f SO:%.1f %s %s Off:%.1f Bl:%.1f Psh:%.1f Dom:%s Mn:%.1f Mx:%.1f%s%s%s%s",
-                cls, ent:EntIndex(), seqName, seqAct, groundSpeed, seqDur, spd, pos.z, step, lStr, rStr, off, blend, push, dom, mn, mx, boneInfo, groundInfo, cycleInfo, rateInfo, layerInfo))
+            print(string.format("[DBG] %s[%d] Seq:%s Act:%d GS:%.1f Dur:%.2f Spd:%.1f Pos:%.1f SO:%.1f LZ:%.1f LHitZ:%.1f LLocZ:%.1f RZ:%.1f RHitZ:%.1f RLocZ:%.1f Off:%.1f Bl:%.1f SmOff:%.1f Psh:%.1f Dom:%s Mn:%.1f Mx:%.1f%s%s%s%s",
+                cls, ent:EntIndex(), seqName, seqAct, groundSpeed, seqDur, spd, pos.z, step, ent._LeftFootDist or 0, ent._LeftFootHitZ or 0, ent._LeftFootLocalZ or 0, ent._RightFootDist or 0, ent._RightFootHitZ or 0, ent._RightFootLocalZ or 0, off, blend, smoothOff, push, dom, mn, mx, boneInfo, groundInfo, cycleInfo, rateInfo, layerInfo))
         end
     end)
 

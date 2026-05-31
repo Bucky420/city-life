@@ -292,6 +292,7 @@ function ENT:Draw()
 			self._LeftFootDist = 99
 			self._LeftFootHitZ = nil
 		end
+		self._LeftFootLocalZ = lFootWorld.z - pos.z
 		if CityNPCs and CityNPCs.DbgEnts and CityNPCs.DbgEnts[self:EntIndex()] then
 			local isActive = math.abs(self._FootPush or 0) > 0.1 and self._DominantFoot == "left"
 			local col = isActive and Color(255, 128, 0) or Color(0, 255, 0)
@@ -330,6 +331,7 @@ function ENT:Draw()
 			self._RightFootDist = 99
 			self._RightFootHitZ = nil
 		end
+		self._RightFootLocalZ = rFootWorld.z - pos.z
 		if CityNPCs and CityNPCs.DbgEnts and CityNPCs.DbgEnts[self:EntIndex()] then
 			local isActive = math.abs(self._FootPush or 0) > 0.1 and self._DominantFoot == "right"
 			local col = isActive and Color(255, 128, 0) or Color(0, 255, 0)
@@ -360,8 +362,11 @@ function ENT:Draw()
 
 		self._DbgBlendOff = math.Clamp(self._StepOrigin - pos.z, -stepHeight + bias, 0)
 
+		-- Smooth the offset to reduce stair bob
+		self._SmoothOff = Lerp(0.15, self._SmoothOff or self._DbgBlendOff, self._DbgBlendOff)
+
 		-- Foot push: raises entity when foot plants on higher ground (curb/stairs)
-		local targetPush = pos.z + (self._DbgBlendOff or 0)
+		local targetPush = pos.z + (self._SmoothOff or 0)
 		local dominantFoot = nil
 
 		-- Push: only when foot is on solid ground at entity level (short trace + HitZ near pos)
@@ -370,7 +375,7 @@ function ENT:Draw()
 		local pushScale = math.Clamp(1 - groundDiff / 16, 0, 1)
 		local lOnGround = self._LeftFootHitZ and (self._LeftFootDist or 99) < 6 and math.abs(self._LeftFootHitZ - pos.z) < 3
 		local rOnGround = self._RightFootHitZ and (self._RightFootDist or 99) < 6 and math.abs(self._RightFootHitZ - pos.z) < 3
-		local needsPush = (lOnGround or rOnGround) and pushScale > 0 and string.find(self:GetSequenceName(self:GetSequence()), "walk") ~= nil
+		local needsPush = false and (lOnGround or rOnGround) and pushScale > 0 and string.find(self:GetSequenceName(self:GetSequence()), "walk") ~= nil
 
 		if needsPush then
 			local plantCycles = self._PlantCycles
@@ -447,8 +452,12 @@ function ENT:Draw()
 		self._SmoothMaxZ = nil
 	end
 
-	-- Step 4: Apply offset and draw
-	self:SetPos(Vector(pos.x, pos.y, pos.z + (self._IkOffset or 0)))
+	-- Step 4: Smooth Z position, then draw
+	local targetZ = pos.z + (self._SmoothOff or 0)
+	local vzDz = targetZ - (self._VisualZ or targetZ)
+	local vzRate = vzDz > 0 and 0.4 or 0.1
+	self._VisualZ = Lerp(vzRate, self._VisualZ or targetZ, targetZ)
+	self:SetPos(Vector(pos.x, pos.y, self._VisualZ))
 	self:SetupBones()
 	self:DrawModel()
 	self:SetPos(pos)

@@ -241,16 +241,7 @@ function ENT:Draw()
 	if groundZ then
 		local pos = self:GetPos()
 
-		local vzRate
-		if traceLen > 36 then
-			vzRate = 0.08
-		elseif traceLen < 8 then
-			vzRate = 0.01
-		else
-			vzRate = 0.065
-		end
-
-		self._VisualZ = Lerp(vzRate, self._VisualZ or groundZ, groundZ)
+		self._VisualZ = Lerp(0.07, self._VisualZ or groundZ, groundZ)
 		self:SetPos(Vector(pos.x, pos.y, self._VisualZ))
 		self:SetupBones()
 		self:DrawModel()

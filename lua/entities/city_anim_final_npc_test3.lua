@@ -181,139 +181,83 @@ end
 if CLIENT then
 
 function ENT:Draw()
-	local pos = self:GetPos()
-
 	self:SetIK(true)
 	self:SetupBones()
 
 	local lFootBone = self:LookupBone("ValveBiped.Bip01_L_Foot")
 	local rFootBone = self:LookupBone("ValveBiped.Bip01_R_Foot")
 
-	local lFootRaw = nil
-	local rFootRaw = nil
-
-	if lFootBone and lFootBone >= 0 then
-		local mat = self:GetBoneMatrix(lFootBone)
-		if mat then lFootRaw = mat:GetTranslation() end
-	end
-	if rFootBone and rFootBone >= 0 then
-		local mat = self:GetBoneMatrix(rFootBone)
-		if mat then rFootRaw = mat:GetTranslation() end
-	end
-
-	-- Trace from each foot world position, track min AND max ground Z
-	local r = 2.5
 	local TRACE_DIST = 72
-	local minGroundZ = nil
-	local maxGroundZ = nil
+	local HULL_R = 2.5
+	local groundZ = nil
+	local traceLen = 0
 	local fwd = self:GetForward()
-	local footForward = Vector(fwd.x, fwd.y, 0):GetNormalized() * 4
+	local footFwd = Vector(fwd.x, fwd.y, 0):GetNormalized() * 4
 
-	if lFootRaw then
-		local lStart = lFootRaw + footForward
-		local lEnd = lStart - Vector(0, 0, TRACE_DIST)
-		local lTr = util.TraceHull({
-			start = lStart,
-			endpos = lEnd,
-			mins = Vector(-r, -r, 0),
-			maxs = Vector(r, r, 1),
-			filter = self,
-			mask = MASK_SOLID
-		})
-		if lTr.Hit then
-			minGroundZ = lTr.HitPos.z
-			maxGroundZ = lTr.HitPos.z
-			self._LeftFootDist = lStart.z - lTr.HitPos.z
-			self._LeftFootHitZ = lTr.HitPos.z
-		else
-			self._LeftFootDist = 99
-			self._LeftFootHitZ = nil
-		end
-		self._LeftFootLocalZ = lFootRaw.z - pos.z
-		if CityNPCs and CityNPCs.DbgEnts and CityNPCs.DbgEnts[self:EntIndex()] then
-			local col = Color(0, 255, 0)
-			local endPos = lTr.Hit and lTr.HitPos or lEnd
-			debugoverlay.Cross(lStart, r, 0.01, col, true)
-			debugoverlay.Cross(endPos, r, 0.01, col, true)
-			debugoverlay.Line(lStart, endPos, 0.01, col, true)
+	if lFootBone then
+		local mat = self:GetBoneMatrix(lFootBone)
+		if mat then
+			local footPos = mat:GetTranslation()
+			local start = footPos + footFwd
+			local tr = util.TraceHull({
+				start = start,
+				endpos = start - Vector(0, 0, TRACE_DIST),
+				mins = Vector(-HULL_R, -HULL_R, 0),
+				maxs = Vector(HULL_R, HULL_R, 1),
+				filter = self,
+				mask = MASK_SOLID
+			})
+			if tr.Hit then
+				groundZ = tr.HitPos.z
+				traceLen = start.z - tr.HitPos.z
+			end
 		end
 	end
 
-	if rFootRaw then
-		local rStart = rFootRaw + footForward
-		local rEnd = rStart - Vector(0, 0, TRACE_DIST)
-		local rTr = util.TraceHull({
-			start = rStart,
-			endpos = rEnd,
-			mins = Vector(-r, -r, 0),
-			maxs = Vector(r, r, 1),
-			filter = self,
-			mask = MASK_SOLID
-		})
-		if rTr.Hit then
-			if minGroundZ then
-				minGroundZ = math.min(minGroundZ, rTr.HitPos.z)
-			else
-				minGroundZ = rTr.HitPos.z
+	if rFootBone then
+		local mat = self:GetBoneMatrix(rFootBone)
+		if mat then
+			local footPos = mat:GetTranslation()
+			local start = footPos + footFwd
+			local tr = util.TraceHull({
+				start = start,
+				endpos = start - Vector(0, 0, TRACE_DIST),
+				mins = Vector(-HULL_R, -HULL_R, 0),
+				maxs = Vector(HULL_R, HULL_R, 1),
+				filter = self,
+				mask = MASK_SOLID
+			})
+			if tr.Hit then
+				if groundZ then
+					groundZ = math.min(groundZ, tr.HitPos.z)
+				else
+					groundZ = tr.HitPos.z
+				end
+				traceLen = math.max(traceLen, start.z - tr.HitPos.z)
 			end
-			if maxGroundZ then
-				maxGroundZ = math.max(maxGroundZ, rTr.HitPos.z)
-			else
-				maxGroundZ = rTr.HitPos.z
-			end
-			self._RightFootDist = rStart.z - rTr.HitPos.z
-			self._RightFootHitZ = rTr.HitPos.z
-		else
-			self._RightFootDist = 99
-			self._RightFootHitZ = nil
-		end
-		self._RightFootLocalZ = rFootRaw.z - pos.z
-		if CityNPCs and CityNPCs.DbgEnts and CityNPCs.DbgEnts[self:EntIndex()] then
-			local col = Color(0, 255, 0)
-			local endPos = rTr.Hit and rTr.HitPos or rEnd
-			debugoverlay.Cross(rStart, r, 0.01, col, true)
-			debugoverlay.Cross(endPos, r, 0.01, col, true)
-			debugoverlay.Line(rStart, endPos, 0.01, col, true)
 		end
 	end
 
-	if minGroundZ and maxGroundZ then
-		self._StepOrigin = self._StepOrigin or pos.z
+	if groundZ then
+		local pos = self:GetPos()
 
-		local stepHeight = 18
+		local vzRate
+		if traceLen > 36 then
+			vzRate = 0.08
+		elseif traceLen < 8 then
+			vzRate = 0.01
+		else
+			vzRate = 0.065
+		end
 
-		minGroundZ = math.min(minGroundZ, pos.z)
-		maxGroundZ = math.min(maxGroundZ, pos.z)
-
-		self._SmoothMinZ = Lerp(0.15, self._SmoothMinZ or minGroundZ, minGroundZ)
-		self._SmoothMaxZ = Lerp(0.15, self._SmoothMaxZ or maxGroundZ, maxGroundZ)
-
-		self._StepOrigin = self._StepOrigin * 0.2 + self._SmoothMinZ * 0.8
-
-		local bias = math.Clamp((self._SmoothMaxZ - self._SmoothMinZ) - stepHeight, 0, stepHeight)
-
-		self._DbgBlendOff = math.Clamp(self._StepOrigin - pos.z, -stepHeight + bias, 0)
-		self._SmoothOff = Lerp(0.15, self._SmoothOff or self._DbgBlendOff, self._DbgBlendOff)
-
-		self._DbgMinZ = minGroundZ
-		self._DbgMaxZ = maxGroundZ
+		self._VisualZ = Lerp(vzRate, self._VisualZ or groundZ, groundZ)
+		self:SetPos(Vector(pos.x, pos.y, self._VisualZ))
+		self:SetupBones()
+		self:DrawModel()
+		self:SetPos(pos)
 	else
-		self._DbgBlendOff = 0
-		self._DbgMinZ = pos.z
-		self._DbgMaxZ = pos.z
-		self._StepOrigin = pos.z
-		self._SmoothMinZ = nil
-		self._SmoothMaxZ = nil
+		self:DrawModel()
 	end
-
-	-- Smooth Z position, then draw
-	local targetZ = pos.z + (self._SmoothOff or 0)
-	local vzRate = 0.08
-	self._VisualZ = Lerp(vzRate, self._VisualZ or targetZ, targetZ)
-	self:SetPos(Vector(pos.x, pos.y, self._VisualZ))
-	self:SetupBones()
-	self:DrawModel()
-	self:SetPos(pos)
 end
 
 end

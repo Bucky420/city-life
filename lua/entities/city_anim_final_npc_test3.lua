@@ -180,6 +180,31 @@ end
 
 if CLIENT then
 
+-- Model footstep events are baked into the .mdl file and never change at runtime.
+-- Cache once per model, shared across all NPCs using the same model.
+local modelFootCycleCache = {}
+
+function ENT:Initialize()
+	local model = self:GetModel()
+	if not modelFootCycleCache[model] then
+		local cache = {}
+		local mi = util.GetModelInfo(model)
+		if mi and mi.Sequences then
+			for _, seq in ipairs(mi.Sequences) do
+				local evt6006, evt6007
+				for _, ev in ipairs(seq.Events) do
+					if ev.Event == 6006 then evt6006 = ev.Cycle end
+					if ev.Event == 6007 then evt6007 = ev.Cycle end
+				end
+				if evt6006 and evt6007 then
+					cache[seq.Name] = { left = evt6006, right = evt6007 }
+				end
+			end
+		end
+		modelFootCycleCache[model] = cache
+	end
+end
+
 function ENT:Draw()
 	self:SetIK(true)
 	self:SetupBones()
@@ -187,65 +212,70 @@ function ENT:Draw()
 	local lFootBone = self:LookupBone("ValveBiped.Bip01_L_Foot")
 	local rFootBone = self:LookupBone("ValveBiped.Bip01_R_Foot")
 
-	local TRACE_DIST = 72
+	local STEP_HEIGHT = 18
 	local HULL_R = 2.5
-	local groundZ = nil
-	local traceLen = 0
-	local fwd = self:GetForward()
-	local footFwd = Vector(fwd.x, fwd.y, 0):GetNormalized() * 4
+	local hullPos = self:GetPos()
+	local hullZ = hullPos.z
 
-	if lFootBone then
-		local mat = self:GetBoneMatrix(lFootBone)
-		if mat then
-			local footPos = mat:GetTranslation()
-			local start = footPos + footFwd
-			local tr = util.TraceHull({
-				start = start,
-				endpos = start - Vector(0, 0, TRACE_DIST),
-				mins = Vector(-HULL_R, -HULL_R, 0),
-				maxs = Vector(HULL_R, HULL_R, 1),
-				filter = self,
-				mask = MASK_SOLID
-			})
-			if tr.Hit then
-				groundZ = tr.HitPos.z
-				traceLen = start.z - tr.HitPos.z
-			end
+	-- Determine which foot is planted using the animation cycle
+	local model = self:GetModel()
+	if model and not modelFootCycleCache[model] then
+		self:Initialize()
+	end
+	local footCycle = model and modelFootCycleCache[model] and modelFootCycleCache[model][self:GetSequenceName(self:GetSequence())]
+	local cycle = self:GetCycle()
+	local activeFoot
+	if footCycle then
+		local function cycleDist(a, b)
+			local d = math.abs(a - b)
+			return math.min(d, math.abs(d - 1))
 		end
+		activeFoot = (cycleDist(cycle, footCycle.left) < cycleDist(cycle, footCycle.right)) and "left" or "right"
+	else
+		activeFoot = "left"
 	end
 
-	if rFootBone then
-		local mat = self:GetBoneMatrix(rFootBone)
-		if mat then
-			local footPos = mat:GetTranslation()
-			local start = footPos + footFwd
-			local tr = util.TraceHull({
-				start = start,
-				endpos = start - Vector(0, 0, TRACE_DIST),
-				mins = Vector(-HULL_R, -HULL_R, 0),
-				maxs = Vector(HULL_R, HULL_R, 1),
-				filter = self,
-				mask = MASK_SOLID
-			})
-			if tr.Hit then
-				if groundZ then
-					groundZ = math.min(groundZ, tr.HitPos.z)
-				else
-					groundZ = tr.HitPos.z
-				end
-				traceLen = math.max(traceLen, start.z - tr.HitPos.z)
-			end
-		end
+	-- Hull-centered traces: centered at hullZ, span ±StepHeight
+	-- This lets UP-stair traces find the higher tread (current trace couldn't)
+	local function doTrace(bone)
+		if not bone then return nil end
+		local mat = self:GetBoneMatrix(bone)
+		if not mat then return nil end
+		local footPos = mat:GetTranslation()
+		local tr = util.TraceHull({
+			start = Vector(footPos.x, footPos.y, hullZ + STEP_HEIGHT + 2),
+			endpos = Vector(footPos.x, footPos.y, hullZ - STEP_HEIGHT - 2),
+			mins = Vector(-HULL_R, -HULL_R, 0),
+			maxs = Vector(HULL_R, HULL_R, 1),
+			filter = self,
+			mask = MASK_SOLID
+		})
+		return tr.Hit and tr.HitPos.z or nil
+	end
+
+	local leftHit = doTrace(lFootBone)
+	local rightHit = doTrace(rFootBone)
+
+	-- Use the planted foot's trace; fall back to the other foot, then previous frame
+	local groundZ
+	if activeFoot == "left" then
+		groundZ = leftHit or rightHit or self._LastGroundZ
+	else
+		groundZ = rightHit or leftHit or self._LastGroundZ
 	end
 
 	if groundZ then
-		local pos = self:GetPos()
+		-- Clamp to within step height of the hull
+		groundZ = math.Clamp(groundZ, hullZ - STEP_HEIGHT, hullZ + STEP_HEIGHT)
 
+		self._LastGroundZ = groundZ
 		self._VisualZ = Lerp(0.07, self._VisualZ or groundZ, groundZ)
-		self:SetPos(Vector(pos.x, pos.y, self._VisualZ))
+		local newPos = Vector(hullPos.x, hullPos.y, self._VisualZ)
+
+		self:SetPos(newPos)
 		self:SetupBones()
 		self:DrawModel()
-		self:SetPos(pos)
+		self:SetPos(hullPos)
 	else
 		self:DrawModel()
 	end

@@ -48,15 +48,21 @@ function ENT:Initialize()
 
 	self.Commander = nil
 	self.NextTurnTime = 0
+	self:SetNWFloat("CityV3ServerOriginZ", self:GetPos().z)
+	self:SetNWFloat("CityV3MoveSpeed", 0)
+	self:SetNWFloat("CityV3DesiredSpeed", self.loco:GetDesiredSpeed())
 end
 
 function ENT:BodyUpdate()
 	local act = self:GetActivity()
 	local speed = self.loco:GetVelocity():Length2D()
+	self:SetNWFloat("CityV3ServerOriginZ", self:GetPos().z)
+	self:SetNWFloat("CityV3MoveSpeed", speed)
+	self:SetNWFloat("CityV3DesiredSpeed", self.loco:GetDesiredSpeed())
 	local wantMove = speed > 20
 
 	if wantMove then
-		local seqIdx = self:LookupSequence("plaza_walk_all")
+		local seqIdx = self:LookupSequence("walk_all")
 		if seqIdx and seqIdx >= 0 then
 			if self:GetSequence() ~= seqIdx then
 				self:SetSequence(seqIdx)
@@ -137,6 +143,7 @@ function ENT:RunBehaviour()
 					print(self:GetClass() .. " [" .. self:EntIndex() .. "] moving to " .. self.Commander:Nick())
 				end
 				self.loco:SetDesiredSpeed(FOLLOW_SPEED_WALK)
+				self:SetNWFloat("CityV3DesiredSpeed", FOLLOW_SPEED_WALK)
 
 				local stuckPos = self:GetPos()
 				local stuckTime = 0
@@ -154,6 +161,7 @@ function ENT:RunBehaviour()
 
 					self.loco:SetDesiredSpeed((dist > FOLLOW_RUN_DIST and FOLLOW_SPEED_RUN) or
 						FOLLOW_SPEED_WALK)
+					self:SetNWFloat("CityV3DesiredSpeed", self.loco:GetDesiredSpeed())
 
 					if self:GetPos():Distance(stuckPos) < 8 then
 						stuckTime = stuckTime + FrameTime()
@@ -202,9 +210,11 @@ function ENT:Initialize()
 		if mi and mi.Sequences then
 			for _, seq in ipairs(mi.Sequences) do
 				local evt6006, evt6007
-				for _, ev in ipairs(seq.Events) do
-					if ev.Event == 6006 then evt6006 = ev.Cycle end
-					if ev.Event == 6007 then evt6007 = ev.Cycle end
+				if seq.Events then
+					for _, ev in ipairs(seq.Events) do
+						if ev.Event == 6006 then evt6006 = ev.Cycle end
+						if ev.Event == 6007 then evt6007 = ev.Cycle end
+					end
 				end
 				if evt6006 and evt6007 then
 					cache[seq.Name] = { left = evt6006, right = evt6007 }
@@ -225,6 +235,7 @@ function ENT:Draw()
 	local STEP_HEIGHT = 18
 	local HULL_R = 2.5
 	local PLANTED_FOOT_Z = 5.5
+	local GROUND_Z_DEADZONE = 0.5
 	local hullPos = self:GetPos()
 	local hullZ = hullPos.z
 	local traceZ = self._VisualZ or self._LastGroundZ or hullZ
@@ -294,29 +305,42 @@ function ENT:Draw()
 		groundZ = (activePlanted and rightHit) or self._LastGroundZ or rightHit or leftHit
 	end
 
-	if isMoving and running then
-		local function localFootZ(bone)
-			if not bone then return "?" end
-			local m = self:GetBoneMatrix(bone)
-			if not m then return "?" end
-			return string.format("%.1f", self:WorldToLocal(m:GetTranslation()).z)
-		end
-		print("CYCLE=" .. string.format("%.3f", cycle) .. " active=" .. activeFoot .. " Lz=" .. localFootZ(lFootBone) .. " Rz=" .. localFootZ(rFootBone) .. " gZ=" .. (groundZ and string.format("%.1f", groundZ) or "nil"))
-	end
+	local minGroundZ = leftHit and rightHit and math.min(leftHit, rightHit) or leftHit or rightHit
+	local maxGroundZ = leftHit and rightHit and math.max(leftHit, rightHit) or leftHit or rightHit
 
 	if groundZ then
 		-- Clamp to our visual ground estimate, not the NextBot hull. The hull can
 		-- step up before the planted foot reaches the next tread.
 		groundZ = math.Clamp(groundZ, traceZ - STEP_HEIGHT, traceZ + STEP_HEIGHT)
+		if self._LastGroundZ and math.abs(groundZ - self._LastGroundZ) < GROUND_Z_DEADZONE then
+			groundZ = self._LastGroundZ
+		end
+
+		-- The trailing foot often remains on the lower tread while the planted foot
+		-- has already advanced. Follow the accepted planted ground for render Z;
+		-- min/max stay in debug so we can compare trace spread against stock NPCs.
+		self._EstIkFloor = groundZ
+		local renderOffset = math.Clamp(self._EstIkFloor - hullZ, -STEP_HEIGHT, 0)
+		local renderZ = hullZ + renderOffset
+
+		if isMoving and running then
+			local function localFootZ(bone)
+				if not bone then return "?" end
+				local m = self:GetBoneMatrix(bone)
+				if not m then return "?" end
+				return string.format("%.1f", self:WorldToLocal(m:GetTranslation()).z)
+			end
+			print("CYCLE=" .. string.format("%.3f", cycle) .. " active=" .. activeFoot .. " Lz=" .. localFootZ(lFootBone) .. " Rz=" .. localFootZ(rFootBone) .. " gZ=" .. string.format("%.1f", groundZ) .. " minZ=" .. (minGroundZ and string.format("%.1f", minGroundZ) or "?") .. " maxZ=" .. (maxGroundZ and string.format("%.1f", maxGroundZ) or "?") .. " estZ=" .. string.format("%.1f", self._EstIkFloor) .. " rZ=" .. string.format("%.1f", renderZ))
+		end
 
 		self._LastGroundZ = groundZ
-		self._VisualZ = Lerp(0.06, self._VisualZ or groundZ, groundZ)
-		local newPos = Vector(hullPos.x, hullPos.y, self._VisualZ)
+		self._VisualZ = groundZ
+		local newPos = Vector(hullPos.x, hullPos.y, renderZ)
 
-		self:SetPos(newPos)
+		self:SetRenderOrigin(newPos)
 		self:SetupBones()
 		self:DrawModel()
-		self:SetPos(hullPos)
+		self:SetRenderOrigin(nil)
 	else
 		self:DrawModel()
 	end

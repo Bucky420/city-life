@@ -42,9 +42,16 @@ list.Set("NPC", "city_anim_test04_player", {
     Category = "Citizens"
 })
 
+list.Set("NPC", "city_anim_test05_base_ai", {
+    Name = "Test v5 (base_ai)",
+    Class = "city_anim_test05_base_ai",
+    Category = "Citizens"
+})
+
 if SERVER then
     AddCSLuaFile("city_npcs/nav_metadata.lua")
     AddCSLuaFile("city_npcs/cl_ui.lua")
+    AddCSLuaFile("city_npcs/cl_anim_viewer.lua")
     AddCSLuaFile("entities/modules/move.lua")
     AddCSLuaFile("entities/modules/z.lua")
     AddCSLuaFile("entities/modules/gestures.lua")
@@ -138,6 +145,8 @@ if SERVER then
         ["city_anim_test02_npc"] = true,
         ["city_anim_final_npc_test3"] = true,
         ["city_anim_test04_player"] = true,
+        ["city_anim_test05_base_ai"] = true,
+        ["npc_citizen"] = true,
     }
 
     concommand.Remove("citynpc_spawn")
@@ -262,16 +271,162 @@ if SERVER then
         if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "--- End (" .. totalEvents .. " total events) ---") end
     end)
 
+    CityNPCs.ServerDbgEnts = CityNPCs.ServerDbgEnts or {}
+
+    local function serverDebugMessage(ply, msg)
+        print(msg)
+        if IsValid(ply) then
+            ply:PrintMessage(HUD_PRINTCONSOLE, msg)
+            ply:PrintMessage(HUD_PRINTTALK, msg)
+        end
+    end
+
+    concommand.Remove("citynpc_debug_entity")
+    concommand.Add("citynpc_debug_entity", function(ply)
+        if not IsValid(ply) then
+            print("[CityNPCs] citynpc_debug_entity must be run by a player")
+            return
+        end
+
+        local target = ply:GetEyeTrace().Entity
+        if not IsValid(target) then
+            serverDebugMessage(ply, "[CityNPCs] Look at an entity first")
+            return
+        end
+
+        local idx = target:EntIndex()
+        if CityNPCs.ServerDbgEnts[idx] then
+            CityNPCs.ServerDbgEnts[idx] = nil
+            serverDebugMessage(ply, "[CityNPCs] Server Debug OFF for " .. target:GetClass() .. " [" .. idx .. "]")
+        else
+            CityNPCs.ServerDbgEnts[idx] = { ent = target, owner = ply, nextPrint = 0 }
+            serverDebugMessage(ply, "[CityNPCs] Server Debug ON for " .. target:GetClass() .. " [" .. idx .. "] model=" .. tostring(target:GetModel()) .. " isnpc=" .. tostring(target:IsNPC()))
+        end
+    end)
+
+    hook.Remove("Think", "CityNPCs_ServerDebugEntity")
+    hook.Add("Think", "CityNPCs_ServerDebugEntity", function()
+        for idx, data in pairs(CityNPCs.ServerDbgEnts) do
+            local ent = data.ent
+            if not IsValid(ent) then
+                CityNPCs.ServerDbgEnts[idx] = nil
+            elseif CurTime() >= data.nextPrint then
+                data.nextPrint = CurTime() + 0.5
+
+                local pos = ent:GetPos()
+                local vel = ent:GetVelocity():Length2D()
+                local seq = ent:GetSequenceName(ent:GetSequence()) or "?"
+                local commander = ent.Commander
+                local follow = IsValid(commander)
+                local target = ent:GetNWVector("CityV5MoveTarget", vector_origin)
+                local fDist = ent:GetNWFloat("CityV5FollowDist", -1)
+
+                serverDebugMessage(data.owner, string.format(
+                    "[SDBG %s#%d] pos=%.1f,%.1f,%.1f vel=%.1f seq=%s isnpc=%s follow=%s fDist=%.1f tgt=%.1f,%.1f,%.1f",
+                    ent:GetClass(), ent:EntIndex(), pos.x, pos.y, pos.z, vel, seq, tostring(ent:IsNPC()), tostring(follow), fDist, target.x, target.y, target.z
+                ))
+            end
+        end
+    end)
+
     print("[CityNPCs] Server loaded - commands: citynpc_spawn [n], citynpc_cleanup")
 end
 
 if CLIENT then
     include("city_npcs/cl_ui.lua")
     include("city_npcs/cl_anim_viewer.lua")
+	print("[CityNPCs] Client debug commands loaded")
 
     CityNPCs = CityNPCs or {}
     CityNPCs.DbgEnts = CityNPCs.DbgEnts or {}
     local dbgFrame = 0
+    local modelFootCycleCache = {}
+
+    local function getModelFootCycles(model)
+        if not model then return nil end
+        if modelFootCycleCache[model] then return modelFootCycleCache[model] end
+
+        local cache = {}
+        local mi = util.GetModelInfo(model)
+        if mi and mi.Sequences then
+            for _, seq in ipairs(mi.Sequences) do
+                local evt6006, evt6007
+                if seq.Events then
+                    for _, ev in ipairs(seq.Events) do
+                        if ev.Event == 6006 then evt6006 = ev.Cycle end
+                        if ev.Event == 6007 then evt6007 = ev.Cycle end
+                    end
+                end
+                if evt6006 and evt6007 then
+                    cache[seq.Name] = { left = evt6006, right = evt6007 }
+                end
+            end
+        end
+
+        modelFootCycleCache[model] = cache
+        return cache
+    end
+
+    local function getOverlayInfo(ent)
+        if not ent.IsValidLayer or not ent.GetLayerSequence then return "unsupported" end
+
+        local parts = {}
+        for slot = 0, 15 do
+            local okValid, valid = pcall(ent.IsValidLayer, ent, slot)
+            if okValid and valid then
+                local _, seq = pcall(ent.GetLayerSequence, ent, slot)
+                local _, weight = pcall(ent.GetLayerWeight, ent, slot)
+                local _, layerCycle = pcall(ent.GetLayerCycle, ent, slot)
+                local _, rate = pcall(ent.GetLayerPlaybackRate, ent, slot)
+
+                seq = tonumber(seq) or -1
+                weight = tonumber(weight) or 0
+                layerCycle = tonumber(layerCycle) or 0
+                rate = tonumber(rate) or 0
+
+                if seq >= 0 or weight > 0 then
+                    parts[#parts + 1] = string.format("%d:%d:%s c%.2f w%.2f r%.2f", slot, seq, ent:GetSequenceName(seq) or "?", layerCycle, weight, rate)
+                end
+            end
+        end
+
+        return (#parts > 0) and table.concat(parts, "|") or "none"
+    end
+
+    local function getSequenceDebug(ent, seq, cycle)
+        local playbackRate = ent.GetPlaybackRate and ent:GetPlaybackRate() or -1
+        local groundSpeed = ent.GetSequenceGroundSpeed and ent:GetSequenceGroundSpeed(seq) or -1
+        local moveDist = ent.GetSequenceMoveDist and ent:GetSequenceMoveDist(seq) or -1
+        local deltaXY = 0
+        local deltaZ = 0
+
+        if ent.GetSequenceMovement then
+            local state = ent._CityNPCsDebugState or {}
+            local lastSeq = state.LastSeq or seq
+            local lastCycle = state.LastCycle or cycle
+            local startCycle = (lastSeq == seq) and lastCycle or cycle
+            local endCycle = cycle
+            if lastSeq == seq and cycle < startCycle then
+                endCycle = cycle + 1
+            end
+            local ok, delta = ent:GetSequenceMovement(seq, startCycle, endCycle)
+            if ok and isvector(delta) then
+                deltaXY = delta:Length2D()
+                deltaZ = delta.z
+            end
+            state.LastSeq = seq
+            state.LastCycle = cycle
+            ent._CityNPCsDebugState = state
+        end
+
+        return playbackRate, groundSpeed, moveDist, deltaXY, deltaZ
+    end
+
+    local function safeActivity(ent)
+        if not ent.GetActivity then return "?" end
+        local ok, act = pcall(ent.GetActivity, ent)
+        return ok and act or "?"
+    end
 
     concommand.Remove("citynpc_debug_entity")
     concommand.Add("citynpc_debug_entity", function()
@@ -283,10 +438,10 @@ if CLIENT then
         local idx = target:EntIndex()
         if CityNPCs.DbgEnts[idx] then
             CityNPCs.DbgEnts[idx] = nil
-            print("[CityNPCs] Debug OFF for " .. target:GetClass() .. " [" .. idx .. "]")
+            print("[CityNPCs] Debug OFF for " .. target:GetClass() .. " [" .. idx .. "] tracked=" .. table.Count(CityNPCs.DbgEnts))
         else
             CityNPCs.DbgEnts[idx] = target
-            print("[CityNPCs] Debug ON for " .. target:GetClass() .. " [" .. idx .. "]")
+            print("[CityNPCs] Debug ON for " .. target:GetClass() .. " [" .. idx .. "] model=" .. tostring(target:GetModel()) .. " tracked=" .. table.Count(CityNPCs.DbgEnts))
         end
     end)
 
@@ -303,82 +458,125 @@ if CLIENT then
 
             local lFootBone = ent:LookupBone("ValveBiped.Bip01_L_Foot")
             local rFootBone = ent:LookupBone("ValveBiped.Bip01_R_Foot")
-            local lKneeBone = ent:LookupBone("ValveBiped.Bip01_L_Calf")
-            local rKneeBone = ent:LookupBone("ValveBiped.Bip01_R_Calf")
-            local lThighBone = ent:LookupBone("ValveBiped.Bip01_L_Thigh")
-            local rThighBone = ent:LookupBone("ValveBiped.Bip01_R_Thigh")
-            local pelvisBone = ent:LookupBone("ValveBiped.Bip01_Pelvis")
 
-            local lStr, rStr = "L:?", "R:?"
-            local r = 2.5
-            local fwd = ent:GetForward()
-            local footForward = Vector(fwd.x, fwd.y, 0):GetNormalized() * 4
-            if lFootBone and lFootBone >= 0 then
-                local mat = ent:GetBoneMatrix(lFootBone)
-                if mat then
-                    local fw = mat:GetTranslation()
-                    local lz = string.format("%.1f", ent:WorldToLocal(fw).z)
-                    local lStart = fw + footForward
-                    local tr = util.TraceHull({start=lStart, endpos=lStart-Vector(0,0,72), mins=Vector(-r,-r,0), maxs=Vector(r,r,1), filter=ent, mask=MASK_SOLID})
-                    local d = tr.Hit and string.format("%.1f", tr.HitPos.z) or "miss"
-                    lStr = string.format("LZ:%s HitZ:%s H:%s", lz, d, tr.Hit and "Y" or "N")
-                end
-            end
-            if rFootBone and rFootBone >= 0 then
-                local mat = ent:GetBoneMatrix(rFootBone)
-                if mat then
-                    local fw = mat:GetTranslation()
-                    local rz = string.format("%.1f", ent:WorldToLocal(fw).z)
-                    local rStart = fw + footForward
-                    local tr = util.TraceHull({start=rStart, endpos=rStart-Vector(0,0,72), mins=Vector(-r,-r,0), maxs=Vector(r,r,1), filter=ent, mask=MASK_SOLID})
-                    local d = tr.Hit and string.format("%.1f", tr.HitPos.z) or "miss"
-                    rStr = string.format("RZ:%s HitZ:%s H:%s", rz, d, tr.Hit and "Y" or "N")
-                end
-            end
+            local STEP_HEIGHT = 18
+            local HULL_R = 2.5
+            local PLANTED_FOOT_Z = 5.5
+            local GROUND_Z_DEADZONE = 0.5
+            local state = ent._CityNPCsDebugState or {}
+            ent._CityNPCsDebugState = state
 
+            local hullZ = ent:GetPos().z
+            local traceZ = state.VisualZ or state.LastGroundZ or hullZ
+            local cycle = ent:GetCycle()
             local seq = ent:GetSequence()
             local seqName = ent:GetSequenceName(seq) or "?"
-            local seqAct = ent:GetSequenceActivity(seq) or -1
-            local groundSpeed = ent:GetSequenceGroundSpeed(seq) or 0
-            local seqDur = ent:SequenceDuration(seq) or 0
-            local spd = ent:GetVelocity():Length2D()
-            local cls = ent:GetClass()
-            local pos = ent:GetPos()
-            local off = ent._IkOffset or 0
-            local blend = ent._DbgBlendOff or 0
-            local smoothOff = ent._SmoothOff or 0
-            local mn = ent._DbgMinZ or 0
-            local mx = ent._DbgMaxZ or 0
-            local step = ent._StepOrigin or pos.z
+            local playbackRate, seqGroundSpeed, seqMoveDist, seqDeltaXY, seqDeltaZ = getSequenceDebug(ent, seq, cycle)
+            local footCycle = getModelFootCycles(ent:GetModel())
+            footCycle = footCycle and footCycle[seqName]
 
-            local boneInfo = ""
-            if pelvisBone and pelvisBone >= 0 then
-                local mat = ent:GetBoneMatrix(pelvisBone)
-                if mat then boneInfo = string.format(" Pelv:%.1f", mat:GetTranslation().z) end
-            end
-            local groundInfo = ""
-            local ge = ent:GetGroundEntity()
-            if IsValid(ge) then groundInfo = " Gnd:" .. ge:GetClass() end
-            local cycleInfo = string.format(" Cyc:%.2f", ent:GetCycle())
-            local rateInfo = string.format(" Rate:%.2f", ent:GetPlaybackRate())
-            local layerInfo = ""
-            local numLayers = 0
-            local ok, nl = pcall(function() return ent:GetNumAnimOverlays() end)
-            if ok and nl then numLayers = nl end
-            if numLayers > 0 then
-                layerInfo = string.format(" Layers:%d", numLayers)
-                for i = 0, numLayers - 1 do
-                    local layer = ent:GetAnimOverlay(i)
-                    if layer and layer:GetWeight() > 0 then
-                        layerInfo = layerInfo .. string.format(" [%d:%s W:%.2f C:%.2f R:%.2f]",
-                            i, ent:GetSequenceName(layer:GetSequence()) or "?",
-                            layer:GetWeight(), layer:GetCycle(), layer:GetPlaybackRate())
-                    end
+            local activeFoot = "left"
+            if footCycle then
+                local function cycleDist(a, b)
+                    local d = math.abs(a - b)
+                    return math.min(d, math.abs(d - 1))
                 end
+                activeFoot = (cycleDist(cycle, footCycle.left) < cycleDist(cycle, footCycle.right)) and "left" or "right"
             end
 
-            print(string.format("[DBG] %s[%d] Seq:%s Act:%d GS:%.1f Dur:%.2f Spd:%.1f Pos:%.1f SO:%.1f LZ:%.1f LHitZ:%.1f LLocZ:%.1f RZ:%.1f RHitZ:%.1f RLocZ:%.1f Off:%.1f Bl:%.1f SmOff:%.1f Mn:%.1f Mx:%.1f%s%s%s%s",
-                cls, ent:EntIndex(), seqName, seqAct, groundSpeed, seqDur, spd, pos.z, step, ent._LeftFootDist or 0, ent._LeftFootHitZ or 0, ent._LeftFootLocalZ or 0, ent._RightFootDist or 0, ent._RightFootHitZ or 0, ent._RightFootLocalZ or 0, off, blend, smoothOff, mn, mx, boneInfo, groundInfo, cycleInfo, rateInfo, layerInfo))
+            local function footLocalZ(bone)
+                if not bone or bone < 0 then return nil end
+                local m = ent:GetBoneMatrix(bone)
+                if not m then return nil end
+                return ent:WorldToLocal(m:GetTranslation()).z
+            end
+
+            local function doTrace(bone, footName)
+                if not bone or bone < 0 then return nil end
+                local mat = ent:GetBoneMatrix(bone)
+                if not mat then return nil end
+                local footPos = mat:GetTranslation()
+                local tr = util.TraceHull({
+                    start = Vector(footPos.x, footPos.y, traceZ + STEP_HEIGHT + 2),
+                    endpos = Vector(footPos.x, footPos.y, traceZ - STEP_HEIGHT - 2),
+                    mins = Vector(-HULL_R, -HULL_R, 0),
+                    maxs = Vector(HULL_R, HULL_R, 1),
+                    filter = ent,
+                    mask = MASK_SOLID
+                })
+                if tr.Hit then
+                    print("TRACE " .. footName .. " hitZ=" .. tr.HitPos.z .. " traceZ=" .. traceZ .. " diff=" .. (tr.HitPos.z - traceZ))
+                end
+                return tr.Hit and tr.HitPos.z or nil
+            end
+
+            local leftHit = doTrace(lFootBone, "L")
+            local rightHit = doTrace(rFootBone, "R")
+            local minGroundZ = leftHit and rightHit and math.min(leftHit, rightHit) or leftHit or rightHit
+            local maxGroundZ = leftHit and rightHit and math.max(leftHit, rightHit) or leftHit or rightHit
+            local activeLocalZ = (activeFoot == "left") and footLocalZ(lFootBone) or footLocalZ(rFootBone)
+            local activePlanted = activeLocalZ and activeLocalZ < PLANTED_FOOT_Z
+
+            local groundZ
+            if activeFoot == "left" then
+                groundZ = (activePlanted and leftHit) or state.LastGroundZ or leftHit or rightHit
+            else
+                groundZ = (activePlanted and rightHit) or state.LastGroundZ or rightHit or leftHit
+            end
+
+            if groundZ then
+                groundZ = math.Clamp(groundZ, traceZ - STEP_HEIGHT, traceZ + STEP_HEIGHT)
+                if state.LastGroundZ and math.abs(groundZ - state.LastGroundZ) < GROUND_Z_DEADZONE then
+                    groundZ = state.LastGroundZ
+                end
+
+                state.EstIkFloor = groundZ
+                local renderOffset = math.Clamp(state.EstIkFloor - hullZ, -STEP_HEIGHT, 0)
+                state.RenderZ = hullZ + renderOffset
+
+                state.LastGroundZ = groundZ
+                state.VisualZ = groundZ
+            end
+
+            local function fmtZ(v)
+                return v and string.format("%.1f", v) or "?"
+            end
+
+            local cls = ent:GetClass()
+            local label = ent.CityDebugLabel and ent:CityDebugLabel() or ((cls == "npc_citizen") and "stock" or "test")
+            local extra = ""
+            if cls == "city_anim_test05_base_ai" then
+                local target = ent:GetNWVector("CityV5MoveTarget", vector_origin)
+                extra = " follow=" .. tostring(ent:GetNWBool("CityV5Following", false)) ..
+                    " fDist=" .. fmtZ(ent:GetNWFloat("CityV5FollowDist", -1)) ..
+                    " tgt=" .. fmtZ(target.x) .. "," .. fmtZ(target.y) .. "," .. fmtZ(target.z)
+            elseif cls == "city_anim_final_npc_test3" then
+                local serverZ = ent:GetNWFloat("CityV3ServerOriginZ", hullZ)
+                extra = " srvZ=" .. fmtZ(serverZ) ..
+                    " zDelta=" .. fmtZ(hullZ - serverZ) ..
+                    " spd=" .. fmtZ(ent:GetNWFloat("CityV3MoveSpeed", 0)) ..
+                    " desired=" .. fmtZ(ent:GetNWFloat("CityV3DesiredSpeed", -1))
+            end
+
+            print("[DBG " .. label .. " " .. cls .. "#" .. ent:EntIndex() .. "] CYCLE=" .. string.format("%.3f", cycle) ..
+                " active=" .. activeFoot ..
+                " Lz=" .. fmtZ(footLocalZ(lFootBone)) ..
+                " Rz=" .. fmtZ(footLocalZ(rFootBone)) ..
+                " gZ=" .. (groundZ and string.format("%.1f", groundZ) or "nil") ..
+                " minZ=" .. fmtZ(minGroundZ) ..
+                " maxZ=" .. fmtZ(maxGroundZ) ..
+                " estZ=" .. fmtZ(state.EstIkFloor) ..
+                " rZ=" .. fmtZ(state.RenderZ) ..
+                " seq=" .. seq .. ":" .. seqName ..
+                " act=" .. tostring(safeActivity(ent)) ..
+                " pb=" .. fmtZ(playbackRate) ..
+                " gspd=" .. fmtZ(seqGroundSpeed) ..
+                " mdist=" .. fmtZ(seqMoveDist) ..
+                " seqDxy=" .. fmtZ(seqDeltaXY) ..
+                " seqDz=" .. fmtZ(seqDeltaZ) ..
+                " overlays=" .. getOverlayInfo(ent) ..
+                " model=" .. (ent:GetModel() or "?") ..
+                " hullZ=" .. string.format("%.1f", hullZ) .. extra)
         end
     end)
 

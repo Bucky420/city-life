@@ -7,7 +7,6 @@ Mod.__index = Mod
 local TURN_GESTURE_COOLDOWN = 0.5
 local TURN_GESTURE_MIN_DELTA = 15
 
--- Play a turn gesture based on yaw delta
 function Mod.AddTurnGesture(ent, yawDeltaDeg)
     if CurTime() < (ent._NextTurnTime or 0) then return end
     ent._NextTurnTime = CurTime() + TURN_GESTURE_COOLDOWN
@@ -35,7 +34,6 @@ function Mod.AddTurnGesture(ent, yawDeltaDeg)
     end
 end
 
--- Calculate yaw delta and play turn gesture
 function Mod.TryTurnGesture(ent, targetPos)
     local yawDelta = math.deg(math.atan2(
         targetPos.y - ent:GetPos().y,
@@ -46,4 +44,17 @@ function Mod.TryTurnGesture(ent, targetPos)
     Mod.AddTurnGesture(ent, yawDelta)
 end
 
-CityNPCs.Modules.turn = Mod
+function Mod.Flinch(ent)
+    if CurTime() < (ent._NextFlinch or 0) then return end
+    ent._NextFlinch = CurTime() + 0.5
+
+    local seqIdx = ent:SelectWeightedSequence(ACT_FLINCH_CHEST)
+    if seqIdx and seqIdx >= 0 then
+        local layerId = ent:AddGestureSequence(seqIdx, true)
+        if layerId and layerId >= 0 then
+            ent:SetLayerPriority(layerId, 10)
+        end
+    end
+end
+
+CityNPCs.Modules.gestures = Mod

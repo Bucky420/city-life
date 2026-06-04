@@ -3,7 +3,7 @@ include("city_npcs/nav_metadata.lua")
 -- Load modules (shared, needed before entities reference them)
 include("entities/modules/move.lua")
 include("entities/modules/z.lua")
-include("entities/modules/turn.lua")
+include("entities/modules/gestures.lua")
 include("entities/modules/life.lua")
  
 list.Set("NPC", "city_npc", {
@@ -47,7 +47,7 @@ if SERVER then
     AddCSLuaFile("city_npcs/cl_ui.lua")
     AddCSLuaFile("entities/modules/move.lua")
     AddCSLuaFile("entities/modules/z.lua")
-    AddCSLuaFile("entities/modules/turn.lua")
+    AddCSLuaFile("entities/modules/gestures.lua")
     AddCSLuaFile("entities/modules/life.lua")
 
     include("city_npcs/navigation.lua")
@@ -232,6 +232,34 @@ if SERVER then
             if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, act .. " -> " .. table.concat(seqs, ", ")) end
         end
         if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "--- End ---") end
+    end)
+
+    concommand.Remove("citynpc_dump_animevents")
+    concommand.Add("citynpc_dump_animevents", function(ply)
+        local target = ply:GetEyeTrace().Entity
+        local cls = IsValid(target) and target:GetClass() or ""
+        if not cityNpcClasses[cls] then
+            if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "[CityNPCs] Look at a city NPC entity") end
+            return
+        end
+        local mdl = target:GetModel()
+        local info = util.GetModelInfo(mdl)
+        if not info or not info.Sequences then
+            if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "[CityNPCs] No ModelInfo available for " .. mdl) end
+            return
+        end
+        if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "--- Animation Events (" .. mdl .. ") ---") end
+        local totalEvents = 0
+        for _, seq in ipairs(info.Sequences) do
+            if seq.Events and #seq.Events > 0 then
+                if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "Seq: " .. seq.Name .. " (" .. #seq.Events .. " events)") end
+                totalEvents = totalEvents + #seq.Events
+                for _, ev in ipairs(seq.Events) do
+                    if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, string.format("  [%s] Cycle:%.3f Event:%d Name:%s Type:%d Options:%s", seq.Name, ev.Cycle, ev.Event, ev.Name, ev.Type, ev.Options)) end
+                end
+            end
+        end
+        if IsValid(ply) then ply:PrintMessage(HUD_PRINTTALK, "--- End (" .. totalEvents .. " total events) ---") end
     end)
 
     print("[CityNPCs] Server loaded - commands: citynpc_spawn [n], citynpc_cleanup")

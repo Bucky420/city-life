@@ -46,20 +46,6 @@ function Mod.Jump(ent, height)
     ent.loco:SetVelocity(Vector(0, 0, height))
 end
 
--- Flinch - play a quick hurt gesture
-function Mod.Flinch(ent)
-    if CurTime() < (ent._NextFlinch or 0) then return end
-    ent._NextFlinch = CurTime() + 0.5
-
-    local seqIdx = ent:SelectWeightedSequence(ACT_FLINCH_CHEST)
-    if seqIdx and seqIdx >= 0 then
-        local layerId = ent:AddGestureSequence(seqIdx, true)
-        if layerId and layerId >= 0 then
-            ent:SetLayerPriority(layerId, 10)
-        end
-    end
-end
-
 -- Set desired speed with optional lerp
 function Mod.SetSpeed(ent, speed, lerp)
     if lerp then

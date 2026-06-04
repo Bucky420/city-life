@@ -55,10 +55,20 @@ function ENT:BodyUpdate()
 	local speed = self.loco:GetVelocity():Length2D()
 	local wantMove = speed > 20
 
-	local newAct = wantMove and ACT_WALK or ACT_IDLE
-
-	if newAct ~= act and newAct then
-		self:StartActivity(newAct)
+	if wantMove then
+		local seqIdx = self:LookupSequence("plaza_walk_all")
+		if seqIdx and seqIdx >= 0 then
+			if self:GetSequence() ~= seqIdx then
+				self:SetSequence(seqIdx)
+			end
+			self._UsingPlazaWalk = true
+		elseif act ~= ACT_WALK then
+			self._UsingPlazaWalk = nil
+			self:StartActivity(ACT_WALK)
+		end
+	elseif self._UsingPlazaWalk or act ~= ACT_IDLE then
+		self._UsingPlazaWalk = nil
+		self:StartActivity(ACT_IDLE)
 	end
 
 	self:BodyMoveXY()
@@ -214,8 +224,10 @@ function ENT:Draw()
 
 	local STEP_HEIGHT = 18
 	local HULL_R = 2.5
+	local PLANTED_FOOT_Z = 5.5
 	local hullPos = self:GetPos()
 	local hullZ = hullPos.z
+	local traceZ = self._VisualZ or self._LastGroundZ or hullZ
 
 	-- Determine which foot is planted using the animation cycle
 	local model = self:GetModel()
@@ -235,41 +247,70 @@ function ENT:Draw()
 		activeFoot = "left"
 	end
 
+	-- Movement detection for debug
+	local actSeq = self:GetSequenceName(self:GetSequence())
+	local isMoving = actSeq and (actSeq:lower():find("walk") or actSeq:lower():find("run"))
+	local running = FrameTime() > 0
+
 	-- Hull-centered traces: centered at hullZ, span ±StepHeight
-	-- This lets UP-stair traces find the higher tread (current trace couldn't)
-	local function doTrace(bone)
+	local function doTrace(bone, footName)
 		if not bone then return nil end
 		local mat = self:GetBoneMatrix(bone)
 		if not mat then return nil end
 		local footPos = mat:GetTranslation()
 		local tr = util.TraceHull({
-			start = Vector(footPos.x, footPos.y, hullZ + STEP_HEIGHT + 2),
-			endpos = Vector(footPos.x, footPos.y, hullZ - STEP_HEIGHT - 2),
+			start = Vector(footPos.x, footPos.y, traceZ + STEP_HEIGHT + 2),
+			endpos = Vector(footPos.x, footPos.y, traceZ - STEP_HEIGHT - 2),
 			mins = Vector(-HULL_R, -HULL_R, 0),
 			maxs = Vector(HULL_R, HULL_R, 1),
 			filter = self,
 			mask = MASK_SOLID
 		})
+		if isMoving and running and tr.Hit then
+			print("TRACE " .. footName .. " hitZ=" .. tr.HitPos.z .. " traceZ=" .. traceZ .. " diff=" .. (tr.HitPos.z - traceZ))
+		end
 		return tr.Hit and tr.HitPos.z or nil
 	end
 
-	local leftHit = doTrace(lFootBone)
-	local rightHit = doTrace(rFootBone)
+	local leftHit = doTrace(lFootBone, "L")
+	local rightHit = doTrace(rFootBone, "R")
 
-	-- Use the planted foot's trace; fall back to the other foot, then previous frame
+	-- Only trust the active foot if its bone is near the ground (planted)
+	local function footLocalZ(bone)
+		if not bone then return nil end
+		local m = self:GetBoneMatrix(bone)
+		if not m then return nil end
+		return self:WorldToLocal(m:GetTranslation()).z
+	end
+	local activeLocalZ = (activeFoot == "left") and footLocalZ(lFootBone) or footLocalZ(rFootBone)
+	local activePlanted = activeLocalZ and activeLocalZ < PLANTED_FOOT_Z
+
+	-- Use only the active planted foot. If it is swinging, hold the last ground
+	-- instead of letting the trailing foot pull us back down to an old tread.
 	local groundZ
 	if activeFoot == "left" then
-		groundZ = leftHit or rightHit or self._LastGroundZ
+		groundZ = (activePlanted and leftHit) or self._LastGroundZ or leftHit or rightHit
 	else
-		groundZ = rightHit or leftHit or self._LastGroundZ
+		groundZ = (activePlanted and rightHit) or self._LastGroundZ or rightHit or leftHit
+	end
+
+	if isMoving and running then
+		local function localFootZ(bone)
+			if not bone then return "?" end
+			local m = self:GetBoneMatrix(bone)
+			if not m then return "?" end
+			return string.format("%.1f", self:WorldToLocal(m:GetTranslation()).z)
+		end
+		print("CYCLE=" .. string.format("%.3f", cycle) .. " active=" .. activeFoot .. " Lz=" .. localFootZ(lFootBone) .. " Rz=" .. localFootZ(rFootBone) .. " gZ=" .. (groundZ and string.format("%.1f", groundZ) or "nil"))
 	end
 
 	if groundZ then
-		-- Clamp to within step height of the hull
-		groundZ = math.Clamp(groundZ, hullZ - STEP_HEIGHT, hullZ + STEP_HEIGHT)
+		-- Clamp to our visual ground estimate, not the NextBot hull. The hull can
+		-- step up before the planted foot reaches the next tread.
+		groundZ = math.Clamp(groundZ, traceZ - STEP_HEIGHT, traceZ + STEP_HEIGHT)
 
 		self._LastGroundZ = groundZ
-		self._VisualZ = Lerp(0.07, self._VisualZ or groundZ, groundZ)
+		self._VisualZ = Lerp(0.06, self._VisualZ or groundZ, groundZ)
 		local newPos = Vector(hullPos.x, hullPos.y, self._VisualZ)
 
 		self:SetPos(newPos)

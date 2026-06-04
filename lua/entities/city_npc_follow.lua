@@ -102,4 +102,6 @@ end
 
 end
 
-language.Add("city_npc_follow", "City NPC (Follow)")
+if CLIENT then
+    language.Add("city_npc_follow", "City NPC (Follow)")
+end

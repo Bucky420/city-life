@@ -18,8 +18,10 @@ local FOLLOW_SPEED_WALK = 80
 local FOLLOW_SPEED_RUN = FOLLOW_SPEED_WALK
 local FOLLOW_REPATH_INTERVAL = 0.25
 local STAIR_SPEED_MIN_FACTOR = 0.5
-local STAIR_CLIMB_SMOOTH = 0.35
-local WALK_IDLE_OVERLAY_CYCLE = 0.27
+local STAIR_SPEED_MAX = 55
+local STAIR_CLIMB_RISE_SMOOTH = 0.35
+local STAIR_CLIMB_FALL_SMOOTH = 0.08
+local WALK_IDLE_OVERLAY_CYCLE = 0.20
 local WALK_IDLE_OVERLAY_WEIGHT = 0.50
 local DEBUG_INTERVAL = 0.05
 local DEBUG_STILL_SPEED = 1
@@ -147,6 +149,7 @@ function ENT:Initialize()
 	self:SetNWFloat("CityV3ServerOriginZ", self:GetPos().z)
 	self:SetNWFloat("CityV3MoveSpeed", 0)
 	self:SetNWFloat("CityV3ManualSpeed", 0)
+	self:SetNWFloat("CityV3ForwardSpeed", 0)
 	self:SetNWFloat("CityV3DesiredSpeed", self.loco:GetDesiredSpeed())
 	self:SetNWVector("CityV3MoveTarget", vector_origin)
 end
@@ -171,12 +174,15 @@ function ENT:PrintDebugLine()
 	local manualSpeed = (Vector(pos.x, pos.y, 0) - Vector(lastPos.x, lastPos.y, 0)):Length() / dt
 	local moveVel = self.loco and self.loco:GetVelocity() or vector_origin
 	local moveSpeed = moveVel:Length2D()
+	local fwd = self:GetForward()
+	local forwardSpeed = moveVel.x * fwd.x + moveVel.y * fwd.y
 	local idealSpeed = self.DebugIdealSpeed or (self.loco and self.loco:GetDesiredSpeed() or -1)
 	self.DebugLastPos = pos
 	self.DebugLastTime = now
 	self:SetNWFloat("CityV3ServerOriginZ", pos.z)
 	self:SetNWFloat("CityV3MoveSpeed", moveSpeed)
 	self:SetNWFloat("CityV3ManualSpeed", manualSpeed)
+	self:SetNWFloat("CityV3ForwardSpeed", forwardSpeed)
 	self:SetNWFloat("CityV3DesiredSpeed", idealSpeed)
 
 	local target = self:GetNWVector("CityV3MoveTarget", vector_origin)
@@ -214,19 +220,23 @@ function ENT:PrintDebugLine()
 	if suppressStillDebug(self, "_CityV3ServerDebug", moveSpeed > DEBUG_STILL_SPEED or manualSpeed > DEBUG_STILL_SPEED, stateKey) then return end
 
 	print(string.format(
-		"[V3DBG #%d] ts=%s follow=%s stock=false cmdDist=%.1f fDist=%.1f tgtDist=%.1f originZ=%.1f mvVel=%.1f spd=%.1f ideal=%.1f tgtZ=%.1f seq=%d:%s act=%s mvAct=%s mvSeq=%s cycle=%.3f pb=%.2f gspd=%.1f mdist=%.1f seqDxy=%.2f seqDz=%.2f mint=%.3f nav=%s schedIdle=%s isnpc=%s stairFac=%.2f climb=%.1f",
-		self:EntIndex(), debugTimestamp(), tostring(cmdValid), cmdDist, self:GetNWFloat("CityV3FollowDist", -1), targetDist,
+		"[V3DBG #%d] ts=%s speed=%.1f fwd=%.1f actual=%.1f desired=%.1f anim=%.1f follow=%s stock=false cmdDist=%.1f fDist=%.1f tgtDist=%.1f originZ=%.1f mvVel=%.1f spd=%.1f ideal=%.1f tgtZ=%.1f seq=%d:%s act=%s mvAct=%s mvSeq=%s cycle=%.3f pb=%.2f gspd=%.1f mdist=%.1f seqDxy=%.2f seqDz=%.2f mint=%.3f nav=%s schedIdle=%s isnpc=%s stairFac=%.2f climb=%.1f stockInt=%.1f cmdSpd=%.1f",
+		self:EntIndex(), debugTimestamp(), moveSpeed, forwardSpeed, manualSpeed, idealSpeed, seqGroundSpeed, tostring(cmdValid), cmdDist, self:GetNWFloat("CityV3FollowDist", -1), targetDist,
 		pos.z, moveSpeed, manualSpeed, idealSpeed, target.z, seq, seqName, tostring(act), "-1", "-1", cycle,
 		playbackRate, seqGroundSpeed, seqMoveDist, seqDeltaXY, seqDeltaZ, -1, "nextbot", tostring(moveSpeed <= 1 and act == ACT_IDLE), tostring(self:IsNPC()),
-		self._StairSpeedFactor or 1, self._StairClimbRate or 0
+		self._StairSpeedFactor or 1, self._StairClimbRate or 0, self._StockIntervalSpeed or idealSpeed, self._StairCommandSpeed or idealSpeed
 	))
 end
 
 function ENT:BodyUpdate()
 	local act = self:GetActivity()
-	local speed = self.loco:GetVelocity():Length2D()
+	local vel = self.loco:GetVelocity()
+	local speed = vel:Length2D()
+	local fwd = self:GetForward()
+	local forwardSpeed = vel.x * fwd.x + vel.y * fwd.y
 	self:SetNWFloat("CityV3ServerOriginZ", self:GetPos().z)
 	self:SetNWFloat("CityV3MoveSpeed", speed)
+	self:SetNWFloat("CityV3ForwardSpeed", forwardSpeed)
 	self:SetNWFloat("CityV3DesiredSpeed", self.DebugIdealSpeed or self.loco:GetDesiredSpeed())
 	local wantMove = speed > 20
 
@@ -340,25 +350,37 @@ function ENT:GetStairProjectedSpeed(baseSpeed)
 	if not self._InStairOverlay then
 		self._StairClimbRate = 0
 		self._StairSpeedFactor = 1
+		self._StockIntervalSpeed = baseSpeed
+		self._StairCommandSpeed = baseSpeed
 		return baseSpeed
 	end
 
 	local now = CurTime()
 	local posZ = self:GetPos().z
-	local lastZ = self._StairSpeedLastZ or posZ
+	local lastZ = self._StairSpeedLastZ or self._LastFollowZ or posZ
 	local lastTime = self._StairSpeedLastTime or now
 	local dt = math.max(now - lastTime, 0.001)
 	local climbRate = math.max(0, posZ - lastZ) / dt
 	self._StairSpeedLastZ = posZ
 	self._StairSpeedLastTime = now
 
-	local smoothedRate = Lerp(STAIR_CLIMB_SMOOTH, self._StairClimbRate or climbRate, climbRate)
+	local oldRate = self._StairClimbRate or climbRate
+	local smooth = (climbRate > oldRate) and STAIR_CLIMB_RISE_SMOOTH or STAIR_CLIMB_FALL_SMOOTH
+	local smoothedRate = Lerp(smooth, oldRate, climbRate)
 	self._StairClimbRate = smoothedRate
 
 	local factor = baseSpeed / math.sqrt(baseSpeed * baseSpeed + smoothedRate * smoothedRate)
 	factor = math.Clamp(factor, STAIR_SPEED_MIN_FACTOR, 1)
 	self._StairSpeedFactor = factor
-	return baseSpeed * factor
+
+	-- Stock NPCs budget movement by CAI_Motor::CalcIntervalMove:
+	-- 0.5 * (currentSpeed + idealSpeed) * interval, then MoveGroundStep resolves geometry.
+	local currentSpeed = self.loco and self.loco:GetVelocity():Length2D() or 0
+	local intervalSpeed = 0.5 * (currentSpeed + baseSpeed)
+	self._StockIntervalSpeed = intervalSpeed
+	local commandSpeed = math.min(intervalSpeed, baseSpeed * factor, STAIR_SPEED_MAX)
+	self._StairCommandSpeed = commandSpeed
+	return commandSpeed
 end
 
 function ENT:RunBehaviour()
@@ -549,6 +571,41 @@ local function getFootInfo(ent, boneName)
 	return ent:WorldToLocal(world).z, world.z
 end
 
+local function getBoneWorldPos(ent, boneName)
+	local bone = ent:LookupBone(boneName)
+	if not bone or bone < 0 then return nil end
+
+	local mat = ent:GetBoneMatrix(bone)
+	return mat and mat:GetTranslation() or nil
+end
+
+local function getLegAngles(ent, side)
+	local prefix = "ValveBiped.Bip01_" .. side .. "_"
+	local hip = getBoneWorldPos(ent, prefix .. "Thigh")
+	local knee = getBoneWorldPos(ent, prefix .. "Calf")
+	local ankle = getBoneWorldPos(ent, prefix .. "Foot")
+	if not hip or not knee or not ankle then return nil, nil, nil end
+
+	local upper = hip - knee
+	local lower = ankle - knee
+	local upperLen = upper:Length()
+	local lowerLen = lower:Length()
+	local kneeAngle
+	if upperLen > 0.001 and lowerLen > 0.001 then
+		local dot = math.Clamp(upper:Dot(lower) / (upperLen * lowerLen), -1, 1)
+		kneeAngle = math.deg(math.acos(dot))
+	end
+
+	local function pitch(a, b)
+		local delta = b - a
+		local horiz = math.sqrt(delta.x * delta.x + delta.y * delta.y)
+		if horiz <= 0.001 then return nil end
+		return math.deg(math.atan(delta.z / horiz))
+	end
+
+	return kneeAngle, pitch(hip, knee), pitch(knee, ankle)
+end
+
 local function getOverlayInfo(ent)
 	if not ent.IsValidLayer or not ent.GetLayerSequence then return "unsupported" end
 
@@ -620,8 +677,11 @@ function ENT:Think()
 	local serverOriginZ = self:GetNWFloat("CityV3ServerOriginZ", originZ)
 	local manualSpeed = self:GetNWFloat("CityV3ManualSpeed", 0)
 	local moveSpeed = self:GetNWFloat("CityV3MoveSpeed", 0)
+	local forwardSpeed = self:GetNWFloat("CityV3ForwardSpeed", 0)
 	local lLocalZ, lWorldZ = getFootInfo(self, "ValveBiped.Bip01_L_Foot")
 	local rLocalZ, rWorldZ = getFootInfo(self, "ValveBiped.Bip01_R_Foot")
+	local lKnee, lThighPitch, lShinPitch = getLegAngles(self, "L")
+	local rKnee, rThighPitch, rShinPitch = getLegAngles(self, "R")
 	local renderOffset = originZ - hullZ
 	lWorldZ = lWorldZ and (lWorldZ + renderOffset) or nil
 	rWorldZ = rWorldZ and (rWorldZ + renderOffset) or nil
@@ -653,11 +713,17 @@ function ENT:Think()
 		" hullGap=" .. fmt(hullGap) ..
 		" rDelta=" .. fmt(renderDelta) ..
 		" Lhit=" .. fmt(ik.leftHit) ..
-		" Rhit=" .. fmt(ik.rightHit)
+		" Rhit=" .. fmt(ik.rightHit) ..
+		" Lknee=" .. fmt(lKnee) ..
+		" Rknee=" .. fmt(rKnee) ..
+		" Lthigh=" .. fmt(lThighPitch) ..
+		" Rthigh=" .. fmt(rThighPitch) ..
+		" Lshin=" .. fmt(lShinPitch) ..
+		" Rshin=" .. fmt(rShinPitch)
 
 	print(string.format(
-		"[V3CDBG #%d] ts=%s originZ=%s srvZ=%s zDelta=%s mvVel=%.1f spd=%.1f Lloc=%s Lw=%s Rloc=%s Rw=%s seq=%d:%s act=%s cycle=%.3f pb=%.2f gspd=%.1f mdist=%.1f seqDxy=%.2f seqDz=%.2f overlays=%s%s",
-		self:EntIndex(), debugTimestamp(), fmt(originZ), fmt(serverOriginZ), fmt(originZ - serverOriginZ), moveSpeed, manualSpeed,
+		"[V3CDBG #%d] ts=%s speed=%.1f fwd=%.1f actual=%.1f anim=%.1f originZ=%s srvZ=%s zDelta=%s mvVel=%.1f spd=%.1f Lloc=%s Lw=%s Rloc=%s Rw=%s seq=%d:%s act=%s cycle=%.3f pb=%.2f gspd=%.1f mdist=%.1f seqDxy=%.2f seqDz=%.2f overlays=%s%s",
+		self:EntIndex(), debugTimestamp(), moveSpeed, forwardSpeed, manualSpeed, seqGroundSpeed, fmt(originZ), fmt(serverOriginZ), fmt(originZ - serverOriginZ), moveSpeed, manualSpeed,
 		fmt(lLocalZ), fmt(lWorldZ), fmt(rLocalZ), fmt(rWorldZ),
 		seq, seqName, tostring(act), cycle, playbackRate, seqGroundSpeed, seqMoveDist, seqDeltaXY, seqDeltaZ, overlays, ikExtra
 	))
@@ -674,7 +740,8 @@ function ENT:Draw()
 	local HULL_R = 2.5
 	local PLANTED_FOOT_Z = 5.5
 	local GROUND_Z_DEADZONE = 0.5
-	local RENDER_Z_SMOOTH_SPEED = 64
+	local RENDER_Z_RISE_SPEED = 40
+	local RENDER_Z_FALL_SPEED = 96
 	local hullPos = self:GetPos()
 	local hullZ = hullPos.z
 	if self._VisualZ and math.abs(self._VisualZ - hullZ) > STEP_HEIGHT * 2 then
@@ -692,14 +759,24 @@ function ENT:Draw()
 	local leftWeight, rightWeight = getEventFootWeights(self)
 	local fwd = self:GetForward()
 	local footForward = isMovingSeq and (Vector(fwd.x, fwd.y, 0):GetNormalized() * 4) or vector_origin
+	local function footLocalZ(bone)
+		if not bone then return nil end
+		local m = self:GetBoneMatrix(bone)
+		if not m then return nil end
+		return self:WorldToLocal(m:GetTranslation()).z
+	end
+	local leftLocalZ = footLocalZ(lFootBone)
+	local rightLocalZ = footLocalZ(rFootBone)
+	local leftPlanted = leftLocalZ and leftLocalZ < PLANTED_FOOT_Z
+	local rightPlanted = rightLocalZ and rightLocalZ < PLANTED_FOOT_Z
 
 	-- Trace from foot XY with the historical small forward probe, centered around
 	-- the current visual ground estimate so stair edges are sampled ahead of the foot.
-	local function doTrace(bone)
+	local function doTrace(bone, planted)
 		if not bone then return nil end
 		local mat = self:GetBoneMatrix(bone)
 		if not mat then return nil end
-		local footPos = mat:GetTranslation() + footForward
+		local footPos = mat:GetTranslation() + (planted and vector_origin or footForward)
 		local tr = util.TraceHull({
 			start = Vector(footPos.x, footPos.y, traceZ + STEP_HEIGHT + 2),
 			endpos = Vector(footPos.x, footPos.y, traceZ - STEP_HEIGHT - 2),
@@ -712,8 +789,8 @@ function ENT:Draw()
 		return tr.HitPos.z
 	end
 
-	local leftHit = doTrace(lFootBone)
-	local rightHit = doTrace(rFootBone)
+	local leftHit = doTrace(lFootBone, leftPlanted)
+	local rightHit = doTrace(rFootBone, rightPlanted)
 	if not leftHit and not rightHit then
 		self._CityV3IkDebug = nil
 		self:DrawModel()
@@ -721,13 +798,7 @@ function ENT:Draw()
 	end
 
 	-- Keep active-foot state in debug so contact selection can be compared to SDK output.
-	local function footLocalZ(bone)
-		if not bone then return nil end
-		local m = self:GetBoneMatrix(bone)
-		if not m then return nil end
-		return self:WorldToLocal(m:GetTranslation()).z
-	end
-	local activeLocalZ = (activeFoot == "left") and footLocalZ(lFootBone) or footLocalZ(rFootBone)
+	local activeLocalZ = (activeFoot == "left") and leftLocalZ or rightLocalZ
 	local activePlanted = activeLocalZ and activeLocalZ < PLANTED_FOOT_Z
 	local activeHit = (activeFoot == "left") and leftHit or rightHit
 
@@ -761,10 +832,11 @@ function ENT:Draw()
 		local serverZ = self:GetNWFloat("CityV3ServerOriginZ", hullZ)
 		local targetRenderZ = math.min(hullZ + renderOffset, serverZ)
 		local renderZ = self._VisualRenderZ or targetRenderZ
-		if math.abs(renderZ - targetRenderZ) > STEP_HEIGHT then
+		if math.abs(renderZ - targetRenderZ) > STEP_HEIGHT * 2 then
 			renderZ = targetRenderZ
 		else
-			renderZ = math.Approach(renderZ, targetRenderZ, FrameTime() * RENDER_Z_SMOOTH_SPEED)
+			local smoothSpeed = (targetRenderZ > renderZ) and RENDER_Z_RISE_SPEED or RENDER_Z_FALL_SPEED
+			renderZ = math.Approach(renderZ, targetRenderZ, FrameTime() * smoothSpeed)
 		end
 
 		self._CityV3IkDebug = {

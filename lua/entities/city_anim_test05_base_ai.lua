@@ -26,6 +26,11 @@ local FOLLOW_LOST_DIST = 30000
 local FOLLOW_TARGET_OFFSET = 32
 local DEBUG_INTERVAL = 0.05
 
+local function debugTimestamp()
+	local frac = RealTime and (RealTime() % 1) or 0
+	return os.date("%H:%M:%S") .. string.format(".%03d", math.floor(frac * 1000))
+end
+
 if SERVER then
 
 local selectedByPlayer = {}
@@ -187,8 +192,8 @@ function ENT:PrintDebugLine()
 	local cmdDist = cmdValid and self:GetPos():Distance(commander:GetPos()) or -1
 
 	print(string.format(
-		"[V5DBG #%d] follow=%s stock=%s cmdDist=%.1f fDist=%.1f tgtDist=%.1f originZ=%.1f mvVel=%.1f spd=%.1f ideal=%.1f tgtZ=%.1f seq=%d:%s act=%s mvAct=%s mvSeq=%s cycle=%.3f pb=%.2f gspd=%.1f mdist=%.1f seqDxy=%.2f seqDz=%.2f mint=%.3f nav=%s schedIdle=%s isnpc=%s",
-		self:EntIndex(), tostring(cmdValid), tostring(self.StockMoveActive), cmdDist, self:GetNWFloat("CityV5FollowDist", -1), targetDist,
+		"[V5DBG #%d] ts=%s follow=%s stock=%s cmdDist=%.1f fDist=%.1f tgtDist=%.1f originZ=%.1f mvVel=%.1f spd=%.1f ideal=%.1f tgtZ=%.1f seq=%d:%s act=%s mvAct=%s mvSeq=%s cycle=%.3f pb=%.2f gspd=%.1f mdist=%.1f seqDxy=%.2f seqDz=%.2f mint=%.3f nav=%s schedIdle=%s isnpc=%s",
+		self:EntIndex(), debugTimestamp(), tostring(cmdValid), tostring(self.StockMoveActive), cmdDist, self:GetNWFloat("CityV5FollowDist", -1), targetDist,
 		pos.z, moveSpeed, manualSpeed, idealSpeed, target.z, seq, seqName, tostring(act), tostring(moveAct), tostring(moveSeq), cycle,
 		playbackRate, seqGroundSpeed, seqMoveDist, seqDeltaXY, seqDeltaZ, moveInterval, tostring(navType),
 		tostring(self:IsCurrentSchedule(SCHED_IDLE_STAND)), tostring(self:IsNPC())
@@ -422,8 +427,8 @@ function ENT:Think()
 	local overlays = getOverlayInfo(self)
 
 	print(string.format(
-		"[V5CDBG #%d] originZ=%s srvZ=%s zDelta=%s mvVel=%.1f spd=%.1f Lloc=%s Lw=%s Rloc=%s Rw=%s seq=%d:%s act=%s cycle=%.3f pb=%.2f gspd=%.1f mdist=%.1f seqDxy=%.2f seqDz=%.2f overlays=%s",
-		self:EntIndex(), fmt(originZ), fmt(serverOriginZ), fmt(originZ - serverOriginZ), moveSpeed, manualSpeed,
+		"[V5CDBG #%d] ts=%s originZ=%s srvZ=%s zDelta=%s mvVel=%.1f spd=%.1f Lloc=%s Lw=%s Rloc=%s Rw=%s seq=%d:%s act=%s cycle=%.3f pb=%.2f gspd=%.1f mdist=%.1f seqDxy=%.2f seqDz=%.2f overlays=%s",
+		self:EntIndex(), debugTimestamp(), fmt(originZ), fmt(serverOriginZ), fmt(originZ - serverOriginZ), moveSpeed, manualSpeed,
 		fmt(lLocalZ), fmt(lWorldZ), fmt(rLocalZ), fmt(rWorldZ),
 		seq, seqName, tostring(act), cycle, playbackRate, seqGroundSpeed, seqMoveDist, seqDeltaXY, seqDeltaZ, overlays
 	))

@@ -504,9 +504,6 @@ if CLIENT then
                     filter = ent,
                     mask = MASK_SOLID
                 })
-                if tr.Hit then
-                    print("TRACE " .. footName .. " hitZ=" .. tr.HitPos.z .. " traceZ=" .. traceZ .. " diff=" .. (tr.HitPos.z - traceZ))
-                end
                 return tr.Hit and tr.HitPos.z or nil
             end
 

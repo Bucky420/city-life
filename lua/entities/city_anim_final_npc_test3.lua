@@ -17,9 +17,13 @@ local FOLLOW_LOST_DIST = 30000
 local FOLLOW_SPEED_WALK = 80
 local FOLLOW_SPEED_RUN = FOLLOW_SPEED_WALK
 local FOLLOW_REPATH_INTERVAL = 0.25
+local STAIR_SPEED_MIN_FACTOR = 0.5
+local STAIR_CLIMB_SMOOTH = 0.35
 local WALK_IDLE_OVERLAY_CYCLE = 0.27
 local WALK_IDLE_OVERLAY_WEIGHT = 0.50
 local DEBUG_INTERVAL = 0.05
+local DEBUG_STILL_SPEED = 1
+local DEBUG_STILL_MAX_SAMPLES = 6
 
 local TURN_GESTURE_COOLDOWN = 0.5
 local TURN_GESTURE_MIN_DELTA = 15
@@ -33,6 +37,19 @@ local modelFootCycleCache = {}
 local function debugTimestamp()
 	local frac = RealTime and (RealTime() % 1) or 0
 	return os.date("%H:%M:%S") .. string.format(".%03d", math.floor(frac * 1000))
+end
+
+local function suppressStillDebug(ent, keyPrefix, moving, stateKey)
+	local lastStateKey = keyPrefix .. "LastState"
+	local sampleKey = keyPrefix .. "StillSamples"
+	if moving or ent[lastStateKey] ~= stateKey then
+		ent[lastStateKey] = stateKey
+		ent[sampleKey] = 0
+		return false
+	end
+
+	ent[sampleKey] = (ent[sampleKey] or 0) + 1
+	return ent[sampleKey] > DEBUG_STILL_MAX_SAMPLES
 end
 
 local function getModelFootCycles(model)
@@ -193,12 +210,15 @@ function ENT:PrintDebugLine()
 	local commander = self.Commander
 	local cmdValid = IsValid(commander)
 	local cmdDist = cmdValid and pos:Distance(commander:GetPos()) or -1
+	local stateKey = string.format("%s:%d:%s:%d", tostring(cmdValid), seq, seqName, math.floor(pos.z + 0.5))
+	if suppressStillDebug(self, "_CityV3ServerDebug", moveSpeed > DEBUG_STILL_SPEED or manualSpeed > DEBUG_STILL_SPEED, stateKey) then return end
 
 	print(string.format(
-		"[V3DBG #%d] ts=%s follow=%s stock=false cmdDist=%.1f fDist=%.1f tgtDist=%.1f originZ=%.1f mvVel=%.1f spd=%.1f ideal=%.1f tgtZ=%.1f seq=%d:%s act=%s mvAct=%s mvSeq=%s cycle=%.3f pb=%.2f gspd=%.1f mdist=%.1f seqDxy=%.2f seqDz=%.2f mint=%.3f nav=%s schedIdle=%s isnpc=%s",
+		"[V3DBG #%d] ts=%s follow=%s stock=false cmdDist=%.1f fDist=%.1f tgtDist=%.1f originZ=%.1f mvVel=%.1f spd=%.1f ideal=%.1f tgtZ=%.1f seq=%d:%s act=%s mvAct=%s mvSeq=%s cycle=%.3f pb=%.2f gspd=%.1f mdist=%.1f seqDxy=%.2f seqDz=%.2f mint=%.3f nav=%s schedIdle=%s isnpc=%s stairFac=%.2f climb=%.1f",
 		self:EntIndex(), debugTimestamp(), tostring(cmdValid), cmdDist, self:GetNWFloat("CityV3FollowDist", -1), targetDist,
 		pos.z, moveSpeed, manualSpeed, idealSpeed, target.z, seq, seqName, tostring(act), "-1", "-1", cycle,
-		playbackRate, seqGroundSpeed, seqMoveDist, seqDeltaXY, seqDeltaZ, -1, "nextbot", tostring(moveSpeed <= 1 and act == ACT_IDLE), tostring(self:IsNPC())
+		playbackRate, seqGroundSpeed, seqMoveDist, seqDeltaXY, seqDeltaZ, -1, "nextbot", tostring(moveSpeed <= 1 and act == ACT_IDLE), tostring(self:IsNPC()),
+		self._StairSpeedFactor or 1, self._StairClimbRate or 0
 	))
 end
 
@@ -316,6 +336,31 @@ function ENT:IsMovingUphill(moveTarget)
 	return zDelta > 8
 end
 
+function ENT:GetStairProjectedSpeed(baseSpeed)
+	if not self._InStairOverlay then
+		self._StairClimbRate = 0
+		self._StairSpeedFactor = 1
+		return baseSpeed
+	end
+
+	local now = CurTime()
+	local posZ = self:GetPos().z
+	local lastZ = self._StairSpeedLastZ or posZ
+	local lastTime = self._StairSpeedLastTime or now
+	local dt = math.max(now - lastTime, 0.001)
+	local climbRate = math.max(0, posZ - lastZ) / dt
+	self._StairSpeedLastZ = posZ
+	self._StairSpeedLastTime = now
+
+	local smoothedRate = Lerp(STAIR_CLIMB_SMOOTH, self._StairClimbRate or climbRate, climbRate)
+	self._StairClimbRate = smoothedRate
+
+	local factor = baseSpeed / math.sqrt(baseSpeed * baseSpeed + smoothedRate * smoothedRate)
+	factor = math.Clamp(factor, STAIR_SPEED_MIN_FACTOR, 1)
+	self._StairSpeedFactor = factor
+	return baseSpeed * factor
+end
+
 function ENT:RunBehaviour()
 	while self:IsValid() and self:Health() > 0 do
 		
@@ -330,6 +375,10 @@ function ENT:RunBehaviour()
 				self._MovingUphill = false
 				self._MovingOnStairs = false
 				self._InStairOverlay = false
+				self._StairClimbRate = 0
+				self._StairSpeedFactor = 1
+				self._StairSpeedLastZ = nil
+				self._StairSpeedLastTime = nil
 				self._LastFollowZ = nil
 				coroutine.wait(1)
 				continue
@@ -371,6 +420,10 @@ function ENT:RunBehaviour()
 						self._MovingUphill = false
 						self._MovingOnStairs = false
 						self._InStairOverlay = false
+						self._StairClimbRate = 0
+						self._StairSpeedFactor = 1
+						self._StairSpeedLastZ = nil
+						self._StairSpeedLastTime = nil
 						self._LastFollowZ = nil
 						break
 					end
@@ -378,6 +431,10 @@ function ENT:RunBehaviour()
 						self._MovingUphill = false
 						self._MovingOnStairs = false
 						self._InStairOverlay = false
+						self._StairClimbRate = 0
+						self._StairSpeedFactor = 1
+						self._StairSpeedLastZ = nil
+						self._StairSpeedLastTime = nil
 						self._LastFollowZ = nil
 						break
 					end
@@ -393,7 +450,7 @@ function ENT:RunBehaviour()
 					end
 					self._LastFollowZ = posZ
 					self.DebugIdealSpeed = FOLLOW_SPEED_WALK
-					self.loco:SetDesiredSpeed(FOLLOW_SPEED_RUN)
+					self.loco:SetDesiredSpeed(self:GetStairProjectedSpeed(FOLLOW_SPEED_RUN))
 					self:SetNWFloat("CityV3DesiredSpeed", self.DebugIdealSpeed)
 
 					if self:GetPos():Distance(stuckPos) < 8 then
@@ -433,6 +490,10 @@ function ENT:RunBehaviour()
 				self._MovingUphill = false
 				self._MovingOnStairs = false
 				self._InStairOverlay = false
+				self._StairClimbRate = 0
+				self._StairSpeedFactor = 1
+				self._StairSpeedLastZ = nil
+				self._StairSpeedLastTime = nil
 				self._LastFollowZ = nil
 				coroutine.wait(1)
 			end
@@ -441,6 +502,10 @@ function ENT:RunBehaviour()
 			self._MovingUphill = false
 			self._MovingOnStairs = false
 			self._InStairOverlay = false
+			self._StairClimbRate = 0
+			self._StairSpeedFactor = 1
+			self._StairSpeedLastZ = nil
+			self._StairSpeedLastTime = nil
 			self._LastFollowZ = nil
 			self:SetNWBool("CityV3Following", false)
 			self:SetNWFloat("CityV3FollowDist", -1)
@@ -569,6 +634,9 @@ function ENT:Think()
 	local hullGap = ik.estIkFloor and (hullZ - ik.estIkFloor) or nil
 	local renderDelta = ik.renderZ and (ik.renderZ - hullZ) or nil
 	local stepSpan = (ik.minGroundZ and ik.maxGroundZ) and (ik.maxGroundZ - ik.minGroundZ) or nil
+	local moving = moveSpeed > DEBUG_STILL_SPEED or manualSpeed > DEBUG_STILL_SPEED
+	local stateKey = string.format("%d:%s:%s:%d:%d", seq, seqName, overlays, math.floor(originZ + 0.5), math.floor(serverOriginZ + 0.5))
+	if suppressStillDebug(self, "_CityV3ClientDebug", moving, stateKey) then return end
 	local ikExtra = " active=" .. tostring(ik.active or "?") ..
 		" hullZ=" .. fmt(hullZ) ..
 		" planted=" .. tostring(ik.planted) ..

@@ -31,6 +31,26 @@ local function debugTimestamp()
 	return os.date("%H:%M:%S") .. string.format(".%03d", math.floor(frac * 1000))
 end
 
+local function fmtVec(v)
+	if not isvector(v) then return tostring(v) end
+	return string.format("(%.1f,%.1f,%.1f)", v.x, v.y, v.z)
+end
+
+local function printSpawnHull(ent, label)
+	if not IsValid(ent) then return end
+
+	local colMins, colMaxs = ent:GetCollisionBounds()
+	local pos = ent:GetPos()
+	local phys = ent:GetPhysicsObject()
+	print(string.format(
+		"[%s HULL #%d] model=%s solid=%s move=%s obbMin=%s obbMax=%s colMin=%s colMax=%s hullWorldMin=%s hullWorldMax=%s hullOrigin=%s physValid=%s physMove=%s physMotion=%s",
+		label, ent:EntIndex(), tostring(ent:GetModel()), tostring(ent:GetSolid()), tostring(ent:GetMoveType()),
+		fmtVec(ent:OBBMins()), fmtVec(ent:OBBMaxs()), fmtVec(colMins), fmtVec(colMaxs),
+		fmtVec(pos + colMins), fmtVec(pos + colMaxs), fmtVec(pos),
+		tostring(IsValid(phys)), IsValid(phys) and tostring(phys:IsMoveable()) or "?", IsValid(phys) and tostring(phys:IsMotionEnabled()) or "?"
+	))
+end
+
 if SERVER then
 
 local selectedByPlayer = {}
@@ -54,22 +74,16 @@ function ENT:Initialize()
 	self.DebugEnabled = false
 	self.DebugLastPos = self:GetPos()
 	self.DebugLastTime = CurTime()
-	self:SetNWBool("CityV5Debug", false)
-	self:SetNWBool("CityV5Following", false)
-	self:SetNWBool("CityV5StockMove", false)
-	self:SetNWFloat("CityV5FollowDist", -1)
-	self:SetNWFloat("CityV5ServerOriginZ", self:GetPos().z)
-	self:SetNWFloat("CityV5MoveSpeed", 0)
-	self:SetNWFloat("CityV5ManualSpeed", 0)
-	self:SetNWFloat("CityV5ForwardSpeed", 0)
-	self:SetNWVector("CityV5MoveTarget", vector_origin)
+	self.DebugFollowDist = -1
+	self.DebugMoveTarget = vector_origin
+
+	printSpawnHull(self, "v5-base_ai")
 end
 
 function ENT:SetDebugEnabled(ply, enabled)
 	self.DebugEnabled = enabled
 	self.DebugOwner = enabled and ply or nil
 	self.NextDebugPrint = 0
-	self:SetNWBool("CityV5Debug", enabled)
 	print("[v5-base_ai] Debug " .. (enabled and "ON" or "OFF") .. " for #" .. self:EntIndex())
 end
 
@@ -80,14 +94,12 @@ function ENT:MoveToPosition(pos, run)
 	self:SetSaveValue("m_vecLastPosition", pos)
 	self:SetSchedule(run and SCHED_FORCED_GO_RUN or SCHED_FORCED_GO)
 	self.StockMoveActive = true
-	self:SetNWBool("CityV5StockMove", true)
-	self:SetNWVector("CityV5MoveTarget", pos)
+	self.DebugMoveTarget = pos
 end
 
 function ENT:ClearCommander()
 	self.Commander = nil
-	self:SetNWBool("CityV5Following", false)
-	self:SetNWFloat("CityV5FollowDist", -1)
+	self.DebugFollowDist = -1
 end
 
 function ENT:ForceDefaultIdle()
@@ -121,7 +133,6 @@ function ENT:ToggleCommander(activator)
 	if self.Commander == activator then
 		self:ClearCommander()
 		self.StockMoveActive = false
-		self:SetNWBool("CityV5StockMove", false)
 		self.DefaultIdleApplied = false
 		activator:PrintMessage(HUD_PRINTTALK, "[v5-base_ai] Follow disabled")
 		return
@@ -131,8 +142,6 @@ function ENT:ToggleCommander(activator)
 	self.StockMoveActive = false
 	self.DefaultIdleApplied = false
 	self.NextMoveRefresh = 0
-	self:SetNWBool("CityV5Following", true)
-	self:SetNWBool("CityV5StockMove", false)
 	if not self.DebugEnabled then
 		self:SetDebugEnabled(activator, true)
 	end
@@ -152,6 +161,15 @@ function ENT:PrintDebugLine()
 	local manualSpeed = (Vector(pos.x, pos.y, 0) - Vector(lastPos.x, lastPos.y, 0)):Length() / dt
 	local moveVel = self.GetMoveVelocity and self:GetMoveVelocity() or vector_origin
 	local moveSpeed = moveVel:Length2D()
+	local groundEnt = self.GetGroundEntity and self:GetGroundEntity() or NULL
+	local groundSpeedVel = self.GetGroundSpeedVelocity and self:GetGroundSpeedVelocity() or vector_origin
+	local stepHeight = self.GetStepHeight and self:GetStepHeight() or -1
+	local npcMoving = self.IsMoving and self:IsMoving() or false
+	local hasObstacles = self.HasObstacles and self:HasObstacles() or false
+	local curWaypoint = self.GetCurWaypointPos and self:GetCurWaypointPos() or nil
+	local nextWaypoint = self.GetNextWaypointPos and self:GetNextWaypointPos() or nil
+	local goalPos = self.GetGoalPos and self:GetGoalPos() or nil
+	local pathDist = self.GetPathDistanceToGoal and self:GetPathDistanceToGoal() or -1
 	local fwd = self:GetForward()
 	local forwardSpeed = moveVel.x * fwd.x + moveVel.y * fwd.y
 	local idealSpeed = self.GetIdealMoveSpeed and self:GetIdealMoveSpeed() or -1
@@ -159,11 +177,7 @@ function ENT:PrintDebugLine()
 	local moveSeq = self.GetMovementSequence and self:GetMovementSequence() or -1
 	self.DebugLastPos = pos
 	self.DebugLastTime = now
-	self:SetNWFloat("CityV5ManualSpeed", manualSpeed)
-	self:SetNWFloat("CityV5MoveSpeed", moveSpeed)
-	self:SetNWFloat("CityV5ForwardSpeed", forwardSpeed)
-	self:SetNWFloat("CityV5ServerOriginZ", pos.z)
-	local target = self:GetNWVector("CityV5MoveTarget", vector_origin)
+	local target = self.DebugMoveTarget or vector_origin
 	local targetDist = (target ~= vector_origin) and self:GetPos():Distance(target) or -1
 	local seq = self:GetSequence()
 	local seqName = self:GetSequenceName(self:GetSequence()) or "?"
@@ -197,11 +211,16 @@ function ENT:PrintDebugLine()
 	local cmdDist = cmdValid and self:GetPos():Distance(commander:GetPos()) or -1
 
 	print(string.format(
-		"[V5DBG #%d] ts=%s speed=%.1f fwd=%.1f actual=%.1f desired=%.1f anim=%.1f follow=%s stock=%s cmdDist=%.1f fDist=%.1f tgtDist=%.1f originZ=%.1f mvVel=%.1f spd=%.1f ideal=%.1f tgtZ=%.1f seq=%d:%s act=%s mvAct=%s mvSeq=%s cycle=%.3f pb=%.2f gspd=%.1f mdist=%.1f seqDxy=%.2f seqDz=%.2f mint=%.3f nav=%s schedIdle=%s isnpc=%s",
-		self:EntIndex(), debugTimestamp(), moveSpeed, forwardSpeed, manualSpeed, idealSpeed, seqGroundSpeed, tostring(cmdValid), tostring(self.StockMoveActive), cmdDist, self:GetNWFloat("CityV5FollowDist", -1), targetDist,
+		"[V5DBG #%d] ts=%s speed=%.1f fwd=%.1f actual=%.1f desired=%.1f anim=%.1f follow=%s stock=%s cmdDist=%.1f tgtDist=%.1f originZ=%.1f mvVel=%.1f spd=%.1f ideal=%.1f tgtZ=%.1f seq=%d:%s act=%s mvAct=%s mvSeq=%s cycle=%.3f pb=%.2f gspd=%.1f mdist=%.1f seqDxy=%.2f seqDz=%.2f mint=%.3f nav=%s schedIdle=%s isnpc=%s npcMoving=%s hasObs=%s stepH=%.1f gEnt=%s gSpdVel=%.1f curWpZ=%s nextWpZ=%s goalZ=%s pathDist=%.1f",
+		self:EntIndex(), debugTimestamp(), moveSpeed, forwardSpeed, manualSpeed, idealSpeed, seqGroundSpeed, tostring(cmdValid), tostring(self.StockMoveActive), cmdDist, targetDist,
 		pos.z, moveSpeed, manualSpeed, idealSpeed, target.z, seq, seqName, tostring(act), tostring(moveAct), tostring(moveSeq), cycle,
 		playbackRate, seqGroundSpeed, seqMoveDist, seqDeltaXY, seqDeltaZ, moveInterval, tostring(navType),
-		tostring(self:IsCurrentSchedule(SCHED_IDLE_STAND)), tostring(self:IsNPC())
+		tostring(self:IsCurrentSchedule(SCHED_IDLE_STAND)), tostring(self:IsNPC()),
+		tostring(npcMoving), tostring(hasObstacles), stepHeight,
+		IsValid(groundEnt) and (groundEnt:GetClass() .. "#" .. groundEnt:EntIndex()) or "none", groundSpeedVel:Length2D(),
+		curWaypoint and string.format("%.1f", curWaypoint.z) or "?",
+		nextWaypoint and string.format("%.1f", nextWaypoint.z) or "?",
+		goalPos and string.format("%.1f", goalPos.z) or "?", pathDist
 	))
 end
 
@@ -223,7 +242,6 @@ function ENT:AcceptInput(name, activator)
 end
 
 function ENT:RunV5Think()
-	self:SetNWFloat("CityV5ServerOriginZ", self:GetPos().z)
 	if self.Commander ~= nil and not IsValid(self.Commander) then
 		self:ClearCommander()
 	end
@@ -231,7 +249,7 @@ function ENT:RunV5Think()
 	if IsValid(self.Commander) then
 		local commander = self.Commander
 		local dist = self:GetPos():Distance(commander:GetPos())
-		self:SetNWFloat("CityV5FollowDist", dist)
+		self.DebugFollowDist = dist
 
 		if dist > FOLLOW_LOST_DIST then
 			self:ClearCommander()
@@ -239,23 +257,22 @@ function ENT:RunV5Think()
 			self.DefaultIdleApplied = false
 		elseif dist <= FOLLOW_STOP_DIST then
 			self:StopMoving(false)
-			self:SetNWVector("CityV5MoveTarget", vector_origin)
+			self.DebugMoveTarget = vector_origin
 		else
 			if CurTime() >= self.NextMoveRefresh then
 				local target = self:GetCommanderMoveTarget(commander)
 				self:SetSaveValue("m_vecLastPosition", target)
 				self:SetSchedule(SCHED_FORCED_GO)
-				self:SetNWVector("CityV5MoveTarget", target)
+				self.DebugMoveTarget = target
 				self.NextMoveRefresh = CurTime() + MOVE_REFRESH_INTERVAL
 			end
 		end
 	elseif self.StockMoveActive then
-		local target = self:GetNWVector("CityV5MoveTarget", vector_origin)
+		local target = self.DebugMoveTarget or vector_origin
 		local targetDist = (target ~= vector_origin) and self:GetPos():Distance(target) or math.huge
 		local moveVel = self.GetMoveVelocity and self:GetMoveVelocity() or vector_origin
 		if targetDist <= 25 and moveVel:Length2D() < 5 then
 			self.StockMoveActive = false
-			self:SetNWBool("CityV5StockMove", false)
 			self.DefaultIdleApplied = false
 		end
 	elseif not self.DefaultIdleApplied then
@@ -317,112 +334,6 @@ end
 
 if CLIENT then
 
-local CLIENT_DEBUG_INTERVAL = 0.05
-
-local function fmt(v)
-	return v and string.format("%.1f", v) or "?"
-end
-
-local function getFootInfo(ent, boneName)
-	local bone = ent:LookupBone(boneName)
-	if not bone or bone < 0 then return nil, nil end
-
-	local mat = ent:GetBoneMatrix(bone)
-	if not mat then return nil, nil end
-
-	local world = mat:GetTranslation()
-	return ent:WorldToLocal(world).z, world.z
-end
-
-local function getBoneWorldPos(ent, boneName)
-	local bone = ent:LookupBone(boneName)
-	if not bone or bone < 0 then return nil end
-
-	local mat = ent:GetBoneMatrix(bone)
-	return mat and mat:GetTranslation() or nil
-end
-
-local function getLegAngles(ent, side)
-	local prefix = "ValveBiped.Bip01_" .. side .. "_"
-	local hip = getBoneWorldPos(ent, prefix .. "Thigh")
-	local knee = getBoneWorldPos(ent, prefix .. "Calf")
-	local ankle = getBoneWorldPos(ent, prefix .. "Foot")
-	if not hip or not knee or not ankle then return nil, nil, nil end
-
-	local upper = hip - knee
-	local lower = ankle - knee
-	local upperLen = upper:Length()
-	local lowerLen = lower:Length()
-	local kneeAngle
-	if upperLen > 0.001 and lowerLen > 0.001 then
-		local dot = math.Clamp(upper:Dot(lower) / (upperLen * lowerLen), -1, 1)
-		kneeAngle = math.deg(math.acos(dot))
-	end
-
-	local function pitch(a, b)
-		local delta = b - a
-		local horiz = math.sqrt(delta.x * delta.x + delta.y * delta.y)
-		if horiz <= 0.001 then return nil end
-		return math.deg(math.atan(delta.z / horiz))
-	end
-
-	return kneeAngle, pitch(hip, knee), pitch(knee, ankle)
-end
-
-local function getOverlayInfo(ent)
-	if not ent.IsValidLayer or not ent.GetLayerSequence then return "unsupported" end
-
-	local parts = {}
-	for slot = 0, 15 do
-		local okValid, valid = pcall(ent.IsValidLayer, ent, slot)
-		if okValid and valid then
-			local _, seq = pcall(ent.GetLayerSequence, ent, slot)
-			local _, weight = pcall(ent.GetLayerWeight, ent, slot)
-			local _, cycle = pcall(ent.GetLayerCycle, ent, slot)
-			local _, rate = pcall(ent.GetLayerPlaybackRate, ent, slot)
-
-			seq = tonumber(seq) or -1
-			weight = tonumber(weight) or 0
-			cycle = tonumber(cycle) or 0
-			rate = tonumber(rate) or 0
-
-			if seq >= 0 or weight > 0 then
-				parts[#parts + 1] = string.format("%d:%d:%s c%.2f w%.2f r%.2f", slot, seq, ent:GetSequenceName(seq) or "?", cycle, weight, rate)
-			end
-		end
-	end
-
-	return (#parts > 0) and table.concat(parts, "|") or "none"
-end
-
-local function getSequenceDebug(ent, seq, cycle)
-	local playbackRate = ent.GetPlaybackRate and ent:GetPlaybackRate() or -1
-	local groundSpeed = ent.GetSequenceGroundSpeed and ent:GetSequenceGroundSpeed(seq) or -1
-	local moveDist = ent.GetSequenceMoveDist and ent:GetSequenceMoveDist(seq) or -1
-	local deltaXY = 0
-	local deltaZ = 0
-
-	if ent.GetSequenceMovement then
-		local lastSeq = ent._CityV5LastSeq or seq
-		local lastCycle = ent._CityV5LastCycle or cycle
-		local startCycle = (lastSeq == seq) and lastCycle or cycle
-		local endCycle = cycle
-		if lastSeq == seq and cycle < startCycle then
-			endCycle = cycle + 1
-		end
-		local ok, delta = ent:GetSequenceMovement(seq, startCycle, endCycle)
-		if ok and isvector(delta) then
-			deltaXY = delta:Length2D()
-			deltaZ = delta.z
-		end
-	end
-
-	ent._CityV5LastSeq = seq
-	ent._CityV5LastCycle = cycle
-
-	return playbackRate, groundSpeed, moveDist, deltaXY, deltaZ
-end
-
 function ENT:Initialize()
 	if BaseClass.Initialize then
 		BaseClass.Initialize(self)
@@ -440,42 +351,6 @@ end
 
 function ENT:CityDebugLabel()
 	return "v5-base_ai"
-end
-
-function ENT:Think()
-	if BaseClass.Think then
-		BaseClass.Think(self)
-	end
-
-	if not self:GetNWBool("CityV5Debug", false) then return end
-	if self.NextClientDebugPrint and CurTime() < self.NextClientDebugPrint then return end
-	self.NextClientDebugPrint = CurTime() + CLIENT_DEBUG_INTERVAL
-
-	self:SetupBones()
-
-	local originZ = self:GetPos().z
-	local serverOriginZ = self:GetNWFloat("CityV5ServerOriginZ", originZ)
-	local manualSpeed = self:GetNWFloat("CityV5ManualSpeed", 0)
-	local moveSpeed = self:GetNWFloat("CityV5MoveSpeed", 0)
-	local forwardSpeed = self:GetNWFloat("CityV5ForwardSpeed", 0)
-	local lLocalZ, lWorldZ = getFootInfo(self, "ValveBiped.Bip01_L_Foot")
-	local rLocalZ, rWorldZ = getFootInfo(self, "ValveBiped.Bip01_R_Foot")
-	local lKnee, lThighPitch, lShinPitch = getLegAngles(self, "L")
-	local rKnee, rThighPitch, rShinPitch = getLegAngles(self, "R")
-	local seq = self:GetSequence()
-	local seqName = self:GetSequenceName(seq) or "?"
-	local act = self.GetActivity and self:GetActivity() or "?"
-	local cycle = self:GetCycle()
-	local playbackRate, seqGroundSpeed, seqMoveDist, seqDeltaXY, seqDeltaZ = getSequenceDebug(self, seq, cycle)
-	local overlays = getOverlayInfo(self)
-
-	print(string.format(
-		"[V5CDBG #%d] ts=%s speed=%.1f fwd=%.1f actual=%.1f anim=%.1f originZ=%s srvZ=%s zDelta=%s mvVel=%.1f spd=%.1f Lloc=%s Lw=%s Rloc=%s Rw=%s seq=%d:%s act=%s cycle=%.3f pb=%.2f gspd=%.1f mdist=%.1f seqDxy=%.2f seqDz=%.2f overlays=%s Lknee=%s Rknee=%s Lthigh=%s Rthigh=%s Lshin=%s Rshin=%s",
-		self:EntIndex(), debugTimestamp(), moveSpeed, forwardSpeed, manualSpeed, seqGroundSpeed, fmt(originZ), fmt(serverOriginZ), fmt(originZ - serverOriginZ), moveSpeed, manualSpeed,
-		fmt(lLocalZ), fmt(lWorldZ), fmt(rLocalZ), fmt(rWorldZ),
-		seq, seqName, tostring(act), cycle, playbackRate, seqGroundSpeed, seqMoveDist, seqDeltaXY, seqDeltaZ, overlays,
-		fmt(lKnee), fmt(rKnee), fmt(lThighPitch), fmt(rThighPitch), fmt(lShinPitch), fmt(rShinPitch)
-	))
 end
 
 end

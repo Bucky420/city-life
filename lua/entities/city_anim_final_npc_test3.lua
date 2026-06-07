@@ -1,4 +1,6 @@
 AddCSLuaFile()
+AddCSLuaFile("city_npcs/debug.lua")
+include("city_npcs/debug.lua")
 
 ENT.Type = "nextbot"
 ENT.Base = "base_nextbot"
@@ -23,7 +25,6 @@ local SDK_HEIGHT_ADJUST_DOWN_MIN = 0.8
 local FOLLOW_REPATH_INTERVAL = 0.25
 local WALK_IDLE_OVERLAY_CYCLE = 0.20
 local WALK_IDLE_OVERLAY_MAX_WEIGHT = 0.97
-local WALK_IDLE_OVERLAY_SCALE = 0.35
 local WALK_IDLE_OVERLAY_FADE_RATE = 4.0
 local DEBUG_INTERVAL = 0.05
 local DEBUG_STILL_SPEED = 1
@@ -41,31 +42,6 @@ local FOOTSTEP_EVENT_RIGHT = 6005
 local FOOTSTEP_EVENT_MAT_LEFT = 6006
 local FOOTSTEP_EVENT_MAT_RIGHT = 6007
 local modelFootCycleCache = {}
-
-local function debugTimestamp()
-	local frac = RealTime and (RealTime() % 1) or 0
-	return os.date("%H:%M:%S") .. string.format(".%03d", math.floor(frac * 1000))
-end
-
-local function fmtVec(v)
-	if not isvector(v) then return tostring(v) end
-	return string.format("(%.1f,%.1f,%.1f)", v.x, v.y, v.z)
-end
-
-local function printSpawnHull(ent, label)
-	if not IsValid(ent) then return end
-
-	local colMins, colMaxs = ent:GetCollisionBounds()
-	local pos = ent:GetPos()
-	local phys = ent:GetPhysicsObject()
-	print(string.format(
-		"[%s HULL #%d] model=%s solid=%s move=%s obbMin=%s obbMax=%s colMin=%s colMax=%s hullWorldMin=%s hullWorldMax=%s hullOrigin=%s physValid=%s physMove=%s physMotion=%s",
-		label, ent:EntIndex(), tostring(ent:GetModel()), tostring(ent:GetSolid()), tostring(ent:GetMoveType()),
-		fmtVec(ent:OBBMins()), fmtVec(ent:OBBMaxs()), fmtVec(colMins), fmtVec(colMaxs),
-		fmtVec(pos + colMins), fmtVec(pos + colMaxs), fmtVec(pos),
-		tostring(IsValid(phys)), IsValid(phys) and tostring(phys:IsMoveable()) or "?", IsValid(phys) and tostring(phys:IsMotionEnabled()) or "?"
-	))
-end
 
 local function suppressStillDebug(ent, keyPrefix, moving, stateKey)
 	local lastStateKey = keyPrefix .. "LastState"
@@ -190,7 +166,7 @@ function ENT:Initialize()
 	self.DebugFollowDist = -1
 	self.DebugMoveTarget = vector_origin
 
-	printSpawnHull(self, "v3-nextbot")
+	CityNPCDebug.PrintSpawnHull(self, "v3-nextbot")
 end
 
 function ENT:SetDebugEnabled(ply, enabled)
@@ -209,9 +185,13 @@ function ENT:PrintDebugLine()
 	local lastPos = self.DebugLastPos or pos
 	local lastTime = self.DebugLastTime or now
 	local dt = math.max(now - lastTime, 0.001)
-	local manualSpeed = (Vector(pos.x, pos.y, 0) - Vector(lastPos.x, lastPos.y, 0)):Length() / dt
+	local posDelta = pos - lastPos
+	local manualSpeed = Vector(posDelta.x, posDelta.y, 0):Length() / dt
+	local zSpeed = posDelta.z / dt
 	local moveVel = self.loco and self.loco:GetVelocity() or vector_origin
 	local moveSpeed = moveVel:Length2D()
+	local entVel = self.GetVelocity and self:GetVelocity() or vector_origin
+	local entSpeed = entVel:Length2D()
 	local groundNormal = (self.loco and self.loco.GetGroundNormal) and self.loco:GetGroundNormal() or vector_origin
 	local groundMotion = (self.loco and self.loco.GetGroundMotionVector) and self.loco:GetGroundMotionVector() or vector_origin
 	local locoOnGround = (self.loco and self.loco.IsOnGround) and self.loco:IsOnGround() or false
@@ -223,63 +203,26 @@ function ENT:PrintDebugLine()
 	local fwd = self:GetForward()
 	local forwardSpeed = moveVel.x * fwd.x + moveVel.y * fwd.y
 	local idealSpeed = self.DebugIdealSpeed or (self.loco and self.loco:GetDesiredSpeed() or -1)
+	local desiredSpeed = (self.loco and self.loco.GetDesiredSpeed) and self.loco:GetDesiredSpeed() or idealSpeed
+	local sdkAdjust = self.DebugSdkSpeedAdjust or -1
 	self.DebugLastPos = pos
 	self.DebugLastTime = now
 	local target = self.DebugMoveTarget or vector_origin
 	local targetDist = (target ~= vector_origin) and pos:Distance(target) or -1
-	local seq = self:GetSequence()
-	local seqName = self:GetSequenceName(seq) or "?"
-	local act = self.GetActivity and self:GetActivity() or "?"
-	local cycle = self:GetCycle()
-	local playbackRate = self.GetPlaybackRate and self:GetPlaybackRate() or -1
-	local seqGroundSpeed = self.GetSequenceGroundSpeed and self:GetSequenceGroundSpeed(seq) or -1
-	local seqMoveDist = self.GetSequenceMoveDist and self:GetSequenceMoveDist(seq) or -1
-	local layerId = self._WalkIdleLayer
-	local layerValid = layerId and self.IsValidLayer and self:IsValidLayer(layerId)
-	local layerSeq = -1
-	local layerName = "none"
-	local layerWeight = self._WalkIdleOverlayWeight or 0
-	local layerTargetWeight = self._WalkIdleOverlayTargetWeight or 0
-	local layerCycle = -1
-	local layerPlaybackRate = -1
-	if layerValid then
-		layerSeq = self.GetLayerSequence and self:GetLayerSequence(layerId) or -1
-		layerName = (layerSeq and layerSeq >= 0 and self:GetSequenceName(layerSeq)) or "?"
-		layerWeight = self.GetLayerWeight and self:GetLayerWeight(layerId) or layerWeight
-		layerCycle = self.GetLayerCycle and self:GetLayerCycle(layerId) or -1
-		layerPlaybackRate = self.GetLayerPlaybackRate and self:GetLayerPlaybackRate(layerId) or -1
-	end
-	local seqDeltaXY = 0
-	local seqDeltaZ = 0
-	if self.GetSequenceMovement then
-		local lastSeq = self.DebugLastSeq or seq
-		local lastCycle = self.DebugLastCycle or cycle
-		local startCycle = (lastSeq == seq) and lastCycle or cycle
-		local endCycle = cycle
-		if lastSeq == seq and cycle < startCycle then
-			endCycle = cycle + 1
-		end
-		local ok, delta = self:GetSequenceMovement(seq, startCycle, endCycle)
-		if ok and isvector(delta) then
-			seqDeltaXY = delta:Length2D()
-			seqDeltaZ = delta.z
-		end
-	end
-	self.DebugLastSeq = seq
-	self.DebugLastCycle = cycle
+	local anim = CityNPCDebug.GetAnimSegment(self)
+	local layerInfo = CityNPCDebug.GetLayerInfo(self, self._WalkIdleLayer, self._WalkIdleOverlayWeight, self._WalkIdleOverlayTargetWeight, self._WalkIdleOverlayRawWeight)
 
 	local commander = self.Commander
 	local cmdValid = IsValid(commander)
 	local cmdDist = cmdValid and pos:Distance(commander:GetPos()) or -1
-	local stateKey = string.format("%s:%d:%s:%d", tostring(cmdValid), seq, seqName, math.floor(pos.z + 0.5))
+	local stateKey = string.format("%s:%d:%s:%d", tostring(cmdValid), anim.seq, anim.seqName, math.floor(pos.z + 0.5))
 	if suppressStillDebug(self, "_CityV3ServerDebug", moveSpeed > DEBUG_STILL_SPEED or manualSpeed > DEBUG_STILL_SPEED, stateKey) then return end
 
 	print(string.format(
-		"[V3DBG #%d] ts=%s speed=%.1f fwd=%.1f actual=%.1f desired=%.1f anim=%.1f follow=%s stock=false cmdDist=%.1f tgtDist=%.1f originZ=%.1f mvVel=%.1f spd=%.1f ideal=%.1f tgtZ=%.1f seq=%d:%s act=%s cycle=%.3f pb=%.2f gspd=%.1f mdist=%.1f seqDxy=%.2f seqDz=%.2f layer=%s layerSeq=%d:%s layerW=%.2f layerTarget=%.2f layerCycle=%.3f layerPb=%.2f nav=%s schedIdle=%s isnpc=%s locoGround=%s locoAttempt=%s locoClimbJump=%s stepH=%.1f gNorm=(%.2f,%.2f,%.2f) gMotion=(%.2f,%.2f,%.2f) gEnt=%s gSpdVel=%.1f",
-		self:EntIndex(), debugTimestamp(), moveSpeed, forwardSpeed, manualSpeed, idealSpeed, seqGroundSpeed, tostring(cmdValid), cmdDist, targetDist,
-		pos.z, moveSpeed, manualSpeed, idealSpeed, target.z, seq, seqName, tostring(act), cycle,
-		playbackRate, seqGroundSpeed, seqMoveDist, seqDeltaXY, seqDeltaZ, tostring(layerValid), layerSeq, layerName, layerWeight, layerTargetWeight, layerCycle, layerPlaybackRate,
-		"nextbot", tostring(moveSpeed <= 1 and act == ACT_IDLE), tostring(self:IsNPC()),
+		"[V3DBG #%d] ts=%s locoVel=%.1f entVel=%.1f actualVel=%.1f fwdVel=%.1f zVel=%.1f desired=%.1f ideal=%.1f sdkAdj=%.2f anim=%.1f follow=%s stock=false cmdDist=%.1f tgtDist=%.1f originZ=%.1f tgtZ=%.1f %s layer=%s layerSeq=%d:%s layerW=%.2f layerTarget=%.2f layerRaw=%.2f layerCycle=%.3f layerPb=%.2f nav=%s schedIdle=%s isnpc=%s locoGround=%s locoAttempt=%s locoClimbJump=%s stepH=%.1f gNorm=(%.2f,%.2f,%.2f) gMotion=(%.2f,%.2f,%.2f) gEnt=%s gSpdVel=%.1f",
+		self:EntIndex(), CityNPCDebug.Timestamp(), moveSpeed, entSpeed, manualSpeed, forwardSpeed, zSpeed, desiredSpeed, idealSpeed, sdkAdjust, anim.seqGroundSpeed, tostring(cmdValid), cmdDist, targetDist,
+		pos.z, target.z, anim.text, tostring(layerInfo.valid), layerInfo.seq, layerInfo.name, layerInfo.weight, layerInfo.targetWeight, layerInfo.rawWeight, layerInfo.cycle, layerInfo.playbackRate,
+		"nextbot", tostring(moveSpeed <= 1 and anim.act == ACT_IDLE), tostring(self:IsNPC()),
 		tostring(locoOnGround), tostring(locoAttempt), tostring(locoClimbJump), stepHeight,
 		groundNormal.x, groundNormal.y, groundNormal.z, groundMotion.x, groundMotion.y, groundMotion.z,
 		IsValid(groundEnt) and (groundEnt:GetClass() .. "#" .. groundEnt:EntIndex()) or "none", groundSpeedVel:Length2D()
@@ -325,7 +268,7 @@ function ENT:BodyUpdate()
 	end
 
 	self:BodyMoveXY()
-	self:UpdateWalkIdleOverlay(wantMove and self._InStairOverlay, math.max(speed, actualSpeed))
+	self:UpdateWalkIdleOverlay(wantMove and self._InStairOverlay, speed)
 	self:PrintDebugLine()
 end
 
@@ -341,6 +284,7 @@ function ENT:UpdateWalkIdleOverlay(wantMove, moveSpeed)
 	if not wantMove then
 		self._WalkIdleOverlayWeight = 0
 		self._WalkIdleOverlayTargetWeight = 0
+		self._WalkIdleOverlayRawWeight = 0
 		self:ClearWalkIdleOverlay()
 		return
 	end
@@ -356,13 +300,14 @@ function ENT:UpdateWalkIdleOverlay(wantMove, moveSpeed)
 	end
 
 	if not validLayer then
-		layerId = self:AddGestureSequence(seqIdx, false)
+		layerId = self.AddLayeredSequence and self:AddLayeredSequence(seqIdx, 0) or self:AddGestureSequence(seqIdx, false)
 		if not layerId or layerId < 0 then return end
 		self._WalkIdleLayer = layerId
 		if self.SetLayerCycle then self:SetLayerCycle(layerId, WALK_IDLE_OVERLAY_CYCLE) end
 	end
 
-	local targetWeight = math.Clamp(1 - ((moveSpeed or 0) / FOLLOW_SPEED_WALK), 0, WALK_IDLE_OVERLAY_MAX_WEIGHT) * WALK_IDLE_OVERLAY_SCALE
+	local targetWeight = math.Clamp(1 - ((moveSpeed or 0) / FOLLOW_SPEED_WALK), 0, WALK_IDLE_OVERLAY_MAX_WEIGHT)
+	self._WalkIdleOverlayRawWeight = targetWeight
 	self._WalkIdleOverlayTargetWeight = targetWeight
 	local dt = FrameTime and FrameTime() or 0.015
 	self._WalkIdleOverlayWeight = math.Approach(self._WalkIdleOverlayWeight or 0, targetWeight, WALK_IDLE_OVERLAY_FADE_RATE * dt)
@@ -433,9 +378,10 @@ function ENT:GetSdkHeightAdjustedSpeed(baseSpeed)
 	if adjust < (self._SdkReactiveSpeedAdjust or 1) then
 		self._SdkReactiveSpeedAdjust = (self._SdkReactiveSpeedAdjust or 1) * 0.2 + adjust * 0.8
 	else
-		self._SdkReactiveSpeedAdjust = (self._SdkReactiveSpeedAdjust or 1) * 0.85 + adjust * 0.15
+		self._SdkReactiveSpeedAdjust = (self._SdkReactiveSpeedAdjust or 1) * 0.5 + adjust * 0.5
 	end
 
+	self.DebugSdkSpeedAdjust = self._SdkReactiveSpeedAdjust
 	self._SdkSpeedPrevOrigin2 = self._SdkSpeedPrevOrigin1 or pos
 	self._SdkSpeedPrevOrigin1 = pos
 	return baseSpeed * self._SdkReactiveSpeedAdjust
@@ -457,6 +403,7 @@ function ENT:RunBehaviour()
 				self._SdkReactiveSpeedAdjust = nil
 				self._SdkSpeedPrevOrigin1 = nil
 				self._SdkSpeedPrevOrigin2 = nil
+				self.DebugSdkSpeedAdjust = nil
 				self._LastFollowZ = nil
 				coroutine.wait(1)
 				continue
@@ -502,6 +449,7 @@ function ENT:RunBehaviour()
 						self._SdkReactiveSpeedAdjust = nil
 						self._SdkSpeedPrevOrigin1 = nil
 						self._SdkSpeedPrevOrigin2 = nil
+						self.DebugSdkSpeedAdjust = nil
 						self._LastFollowZ = nil
 						break
 					end
@@ -512,6 +460,7 @@ function ENT:RunBehaviour()
 						self._SdkReactiveSpeedAdjust = nil
 						self._SdkSpeedPrevOrigin1 = nil
 						self._SdkSpeedPrevOrigin2 = nil
+						self.DebugSdkSpeedAdjust = nil
 						self._LastFollowZ = nil
 						break
 					end
@@ -572,6 +521,7 @@ function ENT:RunBehaviour()
 				self._SdkReactiveSpeedAdjust = nil
 				self._SdkSpeedPrevOrigin1 = nil
 				self._SdkSpeedPrevOrigin2 = nil
+				self.DebugSdkSpeedAdjust = nil
 				self._LastFollowZ = nil
 				coroutine.wait(1)
 			end
@@ -583,6 +533,7 @@ function ENT:RunBehaviour()
 			self._SdkReactiveSpeedAdjust = nil
 			self._SdkSpeedPrevOrigin1 = nil
 			self._SdkSpeedPrevOrigin2 = nil
+			self.DebugSdkSpeedAdjust = nil
 			self._LastFollowZ = nil
 			self.DebugFollowDist = -1
 			self.DebugMoveTarget = vector_origin
@@ -650,7 +601,6 @@ local function getLegAngles(ent, side)
 end
 
 local function printVisualDebug(ent, data)
-	if not ent._CityV3VisualDebug then return end
 	if ent._CityV3NextVisualDebug and CurTime() < ent._CityV3NextVisualDebug then return end
 	ent._CityV3NextVisualDebug = CurTime() + CLIENT_VIS_DEBUG_INTERVAL
 
@@ -853,31 +803,5 @@ function ENT:Draw()
 		self:DrawModel()
 	end
 end
-
-concommand.Remove("citynpc_v3_visual_debug")
-concommand.Add("citynpc_v3_visual_debug", function(ply)
-	local ent = LocalPlayer():GetEyeTrace().Entity
-	if not IsValid(ent) or ent:GetClass() ~= "city_anim_final_npc_test3" then
-		local bestDistSqr = 512 * 512
-		ent = nil
-		local eyePos = LocalPlayer():EyePos()
-		for _, candidate in ipairs(ents.FindByClass("city_anim_final_npc_test3")) do
-			local distSqr = candidate:GetPos():DistToSqr(eyePos)
-			if distSqr < bestDistSqr then
-				bestDistSqr = distSqr
-				ent = candidate
-			end
-		end
-
-		if not IsValid(ent) then
-			print("[v3-nextbot] Look at v3 first")
-			return
-		end
-	end
-
-	ent._CityV3VisualDebug = not ent._CityV3VisualDebug
-	ent._CityV3NextVisualDebug = nil
-	print("[v3-nextbot] Visual Z debug " .. (ent._CityV3VisualDebug and "ON" or "OFF") .. " for #" .. ent:EntIndex())
-end)
 
 end

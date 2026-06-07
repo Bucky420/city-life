@@ -1,4 +1,6 @@
 AddCSLuaFile()
+AddCSLuaFile("city_npcs/debug.lua")
+include("city_npcs/debug.lua")
 
 ENT.Type = "ai"
 ENT.Base = "base_ai"
@@ -26,29 +28,68 @@ local FOLLOW_LOST_DIST = 30000
 local FOLLOW_TARGET_OFFSET = 32
 local DEBUG_INTERVAL = 0.05
 
-local function debugTimestamp()
-	local frac = RealTime and (RealTime() % 1) or 0
-	return os.date("%H:%M:%S") .. string.format(".%03d", math.floor(frac * 1000))
+local INTERNAL_PROBE_NAMES = {
+	"m_flEstIkOffset",
+	"m_flEstIkFloor",
+	"m_flIKGroundMinHeight",
+	"m_flIKGroundMaxHeight",
+	"m_flIKGroundContactTime",
+	"m_iIKCounter",
+	"m_vecAbsOrigin",
+	"m_vecOrigin",
+	"m_vecLastPosition",
+	"m_flStepSize",
+	"m_nStepside",
+	"m_hBigStepGroundEnt",
+	"m_RenderOrigin"
+}
+
+local function fmtProbeValue(v)
+	if isvector(v) then return CityNPCDebug.FormatVector(v) end
+	if isentity(v) and IsValid(v) then return v:GetClass() .. "#" .. v:EntIndex() end
+	if v == NULL then return "NULL" end
+	return tostring(v)
 end
 
-local function fmtVec(v)
-	if not isvector(v) then return tostring(v) end
-	return string.format("(%.1f,%.1f,%.1f)", v.x, v.y, v.z)
+local function getInternalProbeString(ent)
+	if not ent.GetInternalVariable then return "noapi" end
+
+	local parts = {}
+	for _, name in ipairs(INTERNAL_PROBE_NAMES) do
+		local ok, value = pcall(ent.GetInternalVariable, ent, name)
+		if ok and value ~= nil then
+			parts[#parts + 1] = name .. "=" .. fmtProbeValue(value)
+		end
+	end
+
+	return (#parts > 0) and table.concat(parts, ";") or "none"
 end
 
-local function printSpawnHull(ent, label)
-	if not IsValid(ent) then return end
+local function printSaveProbeKeys(ent)
+	if not ent.GetSaveTable then return end
 
-	local colMins, colMaxs = ent:GetCollisionBounds()
-	local pos = ent:GetPos()
-	local phys = ent:GetPhysicsObject()
-	print(string.format(
-		"[%s HULL #%d] model=%s solid=%s move=%s obbMin=%s obbMax=%s colMin=%s colMax=%s hullWorldMin=%s hullWorldMax=%s hullOrigin=%s physValid=%s physMove=%s physMotion=%s",
-		label, ent:EntIndex(), tostring(ent:GetModel()), tostring(ent:GetSolid()), tostring(ent:GetMoveType()),
-		fmtVec(ent:OBBMins()), fmtVec(ent:OBBMaxs()), fmtVec(colMins), fmtVec(colMaxs),
-		fmtVec(pos + colMins), fmtVec(pos + colMaxs), fmtVec(pos),
-		tostring(IsValid(phys)), IsValid(phys) and tostring(phys:IsMoveable()) or "?", IsValid(phys) and tostring(phys:IsMotionEnabled()) or "?"
-	))
+	local ok, saveTable = pcall(ent.GetSaveTable, ent, true)
+	if not ok or not istable(saveTable) then
+		print(string.format("[V5SAVE #%d] unavailable=%s", ent:EntIndex(), tostring(saveTable)))
+		return
+	end
+
+	local keys = {}
+	for key in pairs(saveTable) do
+		local lower = string.lower(tostring(key))
+		if string.find(lower, "ik", 1, true)
+			or string.find(lower, "step", 1, true)
+			or string.find(lower, "origin", 1, true)
+			or string.find(lower, "floor", 1, true)
+			or string.find(lower, "ground", 1, true)
+			or string.find(lower, "render", 1, true)
+			or string.find(lower, "lastposition", 1, true) then
+			keys[#keys + 1] = tostring(key)
+		end
+	end
+
+	table.sort(keys)
+	print(string.format("[V5SAVE #%d] keys=%s", ent:EntIndex(), (#keys > 0) and table.concat(keys, ",") or "none"))
 end
 
 if SERVER then
@@ -76,14 +117,16 @@ function ENT:Initialize()
 	self.DebugLastTime = CurTime()
 	self.DebugFollowDist = -1
 	self.DebugMoveTarget = vector_origin
+	self.DebugSaveProbePrinted = false
 
-	printSpawnHull(self, "v5-base_ai")
+	CityNPCDebug.PrintSpawnHull(self, "v5-base_ai")
 end
 
 function ENT:SetDebugEnabled(ply, enabled)
 	self.DebugEnabled = enabled
 	self.DebugOwner = enabled and ply or nil
 	self.NextDebugPrint = 0
+	self.DebugSaveProbePrinted = false
 	print("[v5-base_ai] Debug " .. (enabled and "ON" or "OFF") .. " for #" .. self:EntIndex())
 end
 
@@ -152,6 +195,10 @@ end
 function ENT:PrintDebugLine()
 	if not self.DebugEnabled or CurTime() < self.NextDebugPrint then return end
 	self.NextDebugPrint = CurTime() + DEBUG_INTERVAL
+	if not self.DebugSaveProbePrinted then
+		self.DebugSaveProbePrinted = true
+		printSaveProbeKeys(self)
+	end
 
 	local pos = self:GetPos()
 	local now = CurTime()
@@ -179,48 +226,24 @@ function ENT:PrintDebugLine()
 	self.DebugLastTime = now
 	local target = self.DebugMoveTarget or vector_origin
 	local targetDist = (target ~= vector_origin) and self:GetPos():Distance(target) or -1
-	local seq = self:GetSequence()
-	local seqName = self:GetSequenceName(self:GetSequence()) or "?"
-	local act = self.GetActivity and self:GetActivity() or "?"
-	local cycle = self:GetCycle()
-	local playbackRate = self.GetPlaybackRate and self:GetPlaybackRate() or -1
-	local seqGroundSpeed = self.GetSequenceGroundSpeed and self:GetSequenceGroundSpeed(seq) or -1
-	local seqMoveDist = self.GetSequenceMoveDist and self:GetSequenceMoveDist(seq) or -1
-	local seqDeltaXY = 0
-	local seqDeltaZ = 0
-	if self.GetSequenceMovement then
-		local lastSeq = self.DebugLastSeq or seq
-		local lastCycle = self.DebugLastCycle or cycle
-		local startCycle = (lastSeq == seq) and lastCycle or cycle
-		local endCycle = cycle
-		if lastSeq == seq and cycle < startCycle then
-			endCycle = cycle + 1
-		end
-		local ok, delta = self:GetSequenceMovement(seq, startCycle, endCycle)
-		if ok and isvector(delta) then
-			seqDeltaXY = delta:Length2D()
-			seqDeltaZ = delta.z
-		end
-	end
-	self.DebugLastSeq = seq
-	self.DebugLastCycle = cycle
+	local anim = CityNPCDebug.GetAnimSegment(self)
 	local moveInterval = self.GetMoveInterval and self:GetMoveInterval() or -1
 	local navType = self.GetNavType and self:GetNavType() or -1
 	local commander = self.Commander
 	local cmdValid = IsValid(commander)
 	local cmdDist = cmdValid and self:GetPos():Distance(commander:GetPos()) or -1
+	local internalProbe = getInternalProbeString(self)
 
 	print(string.format(
-		"[V5DBG #%d] ts=%s speed=%.1f fwd=%.1f actual=%.1f desired=%.1f anim=%.1f follow=%s stock=%s cmdDist=%.1f tgtDist=%.1f originZ=%.1f mvVel=%.1f spd=%.1f ideal=%.1f tgtZ=%.1f seq=%d:%s act=%s mvAct=%s mvSeq=%s cycle=%.3f pb=%.2f gspd=%.1f mdist=%.1f seqDxy=%.2f seqDz=%.2f mint=%.3f nav=%s schedIdle=%s isnpc=%s npcMoving=%s hasObs=%s stepH=%.1f gEnt=%s gSpdVel=%.1f curWpZ=%s nextWpZ=%s goalZ=%s pathDist=%.1f",
-		self:EntIndex(), debugTimestamp(), moveSpeed, forwardSpeed, manualSpeed, idealSpeed, seqGroundSpeed, tostring(cmdValid), tostring(self.StockMoveActive), cmdDist, targetDist,
-		pos.z, moveSpeed, manualSpeed, idealSpeed, target.z, seq, seqName, tostring(act), tostring(moveAct), tostring(moveSeq), cycle,
-		playbackRate, seqGroundSpeed, seqMoveDist, seqDeltaXY, seqDeltaZ, moveInterval, tostring(navType),
+		"[V5DBG #%d] ts=%s speed=%.1f fwd=%.1f actual=%.1f desired=%.1f anim=%.1f follow=%s stock=%s cmdDist=%.1f tgtDist=%.1f originZ=%.1f mvVel=%.1f spd=%.1f ideal=%.1f tgtZ=%.1f %s mvAct=%s mvSeq=%s mint=%.3f nav=%s schedIdle=%s isnpc=%s npcMoving=%s hasObs=%s stepH=%.1f gEnt=%s gSpdVel=%.1f curWpZ=%s nextWpZ=%s goalZ=%s pathDist=%.1f internal=%s",
+		self:EntIndex(), CityNPCDebug.Timestamp(), moveSpeed, forwardSpeed, manualSpeed, idealSpeed, anim.seqGroundSpeed, tostring(cmdValid), tostring(self.StockMoveActive), cmdDist, targetDist,
+		pos.z, moveSpeed, manualSpeed, idealSpeed, target.z, anim.text, tostring(moveAct), tostring(moveSeq), moveInterval, tostring(navType),
 		tostring(self:IsCurrentSchedule(SCHED_IDLE_STAND)), tostring(self:IsNPC()),
 		tostring(npcMoving), tostring(hasObstacles), stepHeight,
 		IsValid(groundEnt) and (groundEnt:GetClass() .. "#" .. groundEnt:EntIndex()) or "none", groundSpeedVel:Length2D(),
 		curWaypoint and string.format("%.1f", curWaypoint.z) or "?",
 		nextWaypoint and string.format("%.1f", nextWaypoint.z) or "?",
-		goalPos and string.format("%.1f", goalPos.z) or "?", pathDist
+		goalPos and string.format("%.1f", goalPos.z) or "?", pathDist, internalProbe
 	))
 end
 

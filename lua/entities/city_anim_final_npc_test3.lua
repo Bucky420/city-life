@@ -16,10 +16,14 @@ local FOLLOW_LOST_DIST = 30000
 
 local FOLLOW_SPEED_WALK = 80
 local FOLLOW_SPEED_RUN = FOLLOW_SPEED_WALK
-local FOLLOW_SPEED_STAIR = 30
+local FOLLOW_ACCEL = 200
+local FOLLOW_DECEL = 200
+local SDK_HEIGHT_ADJUST_UP_MIN = 0.5
+local SDK_HEIGHT_ADJUST_DOWN_MIN = 0.8
 local FOLLOW_REPATH_INTERVAL = 0.25
 local WALK_IDLE_OVERLAY_CYCLE = 0.20
 local WALK_IDLE_OVERLAY_MAX_WEIGHT = 0.97
+local WALK_IDLE_OVERLAY_SCALE = 0.35
 local WALK_IDLE_OVERLAY_FADE_RATE = 4.0
 local DEBUG_INTERVAL = 0.05
 local DEBUG_STILL_SPEED = 1
@@ -170,8 +174,8 @@ function ENT:Initialize()
 	self:SetUseType(SIMPLE_USE)
 
 	self.loco:SetDesiredSpeed(FOLLOW_SPEED_WALK)
-	self.loco:SetAcceleration(200)
-	self.loco:SetDeceleration(200)
+	self.loco:SetAcceleration(FOLLOW_ACCEL)
+	self.loco:SetDeceleration(FOLLOW_DECEL)
 	self.loco:SetStepHeight(18)
 	self.loco:SetMaxYawRate(180)
 
@@ -230,6 +234,21 @@ function ENT:PrintDebugLine()
 	local playbackRate = self.GetPlaybackRate and self:GetPlaybackRate() or -1
 	local seqGroundSpeed = self.GetSequenceGroundSpeed and self:GetSequenceGroundSpeed(seq) or -1
 	local seqMoveDist = self.GetSequenceMoveDist and self:GetSequenceMoveDist(seq) or -1
+	local layerId = self._WalkIdleLayer
+	local layerValid = layerId and self.IsValidLayer and self:IsValidLayer(layerId)
+	local layerSeq = -1
+	local layerName = "none"
+	local layerWeight = self._WalkIdleOverlayWeight or 0
+	local layerTargetWeight = self._WalkIdleOverlayTargetWeight or 0
+	local layerCycle = -1
+	local layerPlaybackRate = -1
+	if layerValid then
+		layerSeq = self.GetLayerSequence and self:GetLayerSequence(layerId) or -1
+		layerName = (layerSeq and layerSeq >= 0 and self:GetSequenceName(layerSeq)) or "?"
+		layerWeight = self.GetLayerWeight and self:GetLayerWeight(layerId) or layerWeight
+		layerCycle = self.GetLayerCycle and self:GetLayerCycle(layerId) or -1
+		layerPlaybackRate = self.GetLayerPlaybackRate and self:GetLayerPlaybackRate(layerId) or -1
+	end
 	local seqDeltaXY = 0
 	local seqDeltaZ = 0
 	if self.GetSequenceMovement then
@@ -256,10 +275,11 @@ function ENT:PrintDebugLine()
 	if suppressStillDebug(self, "_CityV3ServerDebug", moveSpeed > DEBUG_STILL_SPEED or manualSpeed > DEBUG_STILL_SPEED, stateKey) then return end
 
 	print(string.format(
-		"[V3DBG #%d] ts=%s speed=%.1f fwd=%.1f actual=%.1f desired=%.1f anim=%.1f follow=%s stock=false cmdDist=%.1f tgtDist=%.1f originZ=%.1f mvVel=%.1f spd=%.1f ideal=%.1f tgtZ=%.1f seq=%d:%s act=%s cycle=%.3f pb=%.2f gspd=%.1f mdist=%.1f seqDxy=%.2f seqDz=%.2f nav=%s schedIdle=%s isnpc=%s locoGround=%s locoAttempt=%s locoClimbJump=%s stepH=%.1f gNorm=(%.2f,%.2f,%.2f) gMotion=(%.2f,%.2f,%.2f) gEnt=%s gSpdVel=%.1f",
+		"[V3DBG #%d] ts=%s speed=%.1f fwd=%.1f actual=%.1f desired=%.1f anim=%.1f follow=%s stock=false cmdDist=%.1f tgtDist=%.1f originZ=%.1f mvVel=%.1f spd=%.1f ideal=%.1f tgtZ=%.1f seq=%d:%s act=%s cycle=%.3f pb=%.2f gspd=%.1f mdist=%.1f seqDxy=%.2f seqDz=%.2f layer=%s layerSeq=%d:%s layerW=%.2f layerTarget=%.2f layerCycle=%.3f layerPb=%.2f nav=%s schedIdle=%s isnpc=%s locoGround=%s locoAttempt=%s locoClimbJump=%s stepH=%.1f gNorm=(%.2f,%.2f,%.2f) gMotion=(%.2f,%.2f,%.2f) gEnt=%s gSpdVel=%.1f",
 		self:EntIndex(), debugTimestamp(), moveSpeed, forwardSpeed, manualSpeed, idealSpeed, seqGroundSpeed, tostring(cmdValid), cmdDist, targetDist,
 		pos.z, moveSpeed, manualSpeed, idealSpeed, target.z, seq, seqName, tostring(act), cycle,
-		playbackRate, seqGroundSpeed, seqMoveDist, seqDeltaXY, seqDeltaZ, "nextbot", tostring(moveSpeed <= 1 and act == ACT_IDLE), tostring(self:IsNPC()),
+		playbackRate, seqGroundSpeed, seqMoveDist, seqDeltaXY, seqDeltaZ, tostring(layerValid), layerSeq, layerName, layerWeight, layerTargetWeight, layerCycle, layerPlaybackRate,
+		"nextbot", tostring(moveSpeed <= 1 and act == ACT_IDLE), tostring(self:IsNPC()),
 		tostring(locoOnGround), tostring(locoAttempt), tostring(locoClimbJump), stepHeight,
 		groundNormal.x, groundNormal.y, groundNormal.z, groundMotion.x, groundMotion.y, groundMotion.z,
 		IsValid(groundEnt) and (groundEnt:GetClass() .. "#" .. groundEnt:EntIndex()) or "none", groundSpeedVel:Length2D()
@@ -320,6 +340,7 @@ end
 function ENT:UpdateWalkIdleOverlay(wantMove, moveSpeed)
 	if not wantMove then
 		self._WalkIdleOverlayWeight = 0
+		self._WalkIdleOverlayTargetWeight = 0
 		self:ClearWalkIdleOverlay()
 		return
 	end
@@ -338,14 +359,15 @@ function ENT:UpdateWalkIdleOverlay(wantMove, moveSpeed)
 		layerId = self:AddGestureSequence(seqIdx, false)
 		if not layerId or layerId < 0 then return end
 		self._WalkIdleLayer = layerId
+		if self.SetLayerCycle then self:SetLayerCycle(layerId, WALK_IDLE_OVERLAY_CYCLE) end
 	end
 
-	local targetWeight = math.Clamp(1 - ((moveSpeed or 0) / FOLLOW_SPEED_WALK), 0, WALK_IDLE_OVERLAY_MAX_WEIGHT)
+	local targetWeight = math.Clamp(1 - ((moveSpeed or 0) / FOLLOW_SPEED_WALK), 0, WALK_IDLE_OVERLAY_MAX_WEIGHT) * WALK_IDLE_OVERLAY_SCALE
+	self._WalkIdleOverlayTargetWeight = targetWeight
 	local dt = FrameTime and FrameTime() or 0.015
 	self._WalkIdleOverlayWeight = math.Approach(self._WalkIdleOverlayWeight or 0, targetWeight, WALK_IDLE_OVERLAY_FADE_RATE * dt)
 
 	if self.SetLayerPriority then self:SetLayerPriority(layerId, 1) end
-	if self.SetLayerCycle then self:SetLayerCycle(layerId, WALK_IDLE_OVERLAY_CYCLE) end
 	if self.SetLayerWeight then self:SetLayerWeight(layerId, self._WalkIdleOverlayWeight) end
 	if self.SetLayerPlaybackRate then self:SetLayerPlaybackRate(layerId, 1) end
 end
@@ -397,6 +419,28 @@ function ENT:IsMovingUphill(moveTarget)
 	return zDelta > 8
 end
 
+function ENT:GetSdkHeightAdjustedSpeed(baseSpeed)
+	local pos = self:GetPos()
+	local prev = self._SdkSpeedPrevOrigin2 or self._SdkSpeedPrevOrigin1 or pos
+	local dist = (Vector(pos.x, pos.y, 0) - Vector(prev.x, prev.y, 0)):Length()
+	local height = pos.z - prev.z
+	local adjust = 1
+	if dist > 0.001 then
+		adjust = 1.1 - math.abs(height / dist)
+		adjust = math.Clamp(adjust, (height > 0) and SDK_HEIGHT_ADJUST_UP_MIN or SDK_HEIGHT_ADJUST_DOWN_MIN, 1)
+	end
+
+	if adjust < (self._SdkReactiveSpeedAdjust or 1) then
+		self._SdkReactiveSpeedAdjust = (self._SdkReactiveSpeedAdjust or 1) * 0.2 + adjust * 0.8
+	else
+		self._SdkReactiveSpeedAdjust = (self._SdkReactiveSpeedAdjust or 1) * 0.85 + adjust * 0.15
+	end
+
+	self._SdkSpeedPrevOrigin2 = self._SdkSpeedPrevOrigin1 or pos
+	self._SdkSpeedPrevOrigin1 = pos
+	return baseSpeed * self._SdkReactiveSpeedAdjust
+end
+
 function ENT:RunBehaviour()
 	while self:IsValid() and self:Health() > 0 do
 		
@@ -410,6 +454,9 @@ function ENT:RunBehaviour()
 				self._MovingUphill = false
 				self._MovingOnStairs = false
 				self._InStairOverlay = false
+				self._SdkReactiveSpeedAdjust = nil
+				self._SdkSpeedPrevOrigin1 = nil
+				self._SdkSpeedPrevOrigin2 = nil
 				self._LastFollowZ = nil
 				coroutine.wait(1)
 				continue
@@ -431,6 +478,8 @@ function ENT:RunBehaviour()
 					print(self:GetClass() .. " [" .. self:EntIndex() .. "] moving to " .. self.Commander:Nick())
 				end
 				self.DebugIdealSpeed = FOLLOW_SPEED_WALK
+				self.loco:SetAcceleration(FOLLOW_ACCEL)
+				self.loco:SetDeceleration(FOLLOW_DECEL)
 				self.loco:SetDesiredSpeed(FOLLOW_SPEED_WALK)
 				local path = Path("Chase")
 				path:SetMinLookAheadDistance(300)
@@ -450,6 +499,9 @@ function ENT:RunBehaviour()
 						self._MovingUphill = false
 						self._MovingOnStairs = false
 						self._InStairOverlay = false
+						self._SdkReactiveSpeedAdjust = nil
+						self._SdkSpeedPrevOrigin1 = nil
+						self._SdkSpeedPrevOrigin2 = nil
 						self._LastFollowZ = nil
 						break
 					end
@@ -457,6 +509,9 @@ function ENT:RunBehaviour()
 						self._MovingUphill = false
 						self._MovingOnStairs = false
 						self._InStairOverlay = false
+						self._SdkReactiveSpeedAdjust = nil
+						self._SdkSpeedPrevOrigin1 = nil
+						self._SdkSpeedPrevOrigin2 = nil
 						self._LastFollowZ = nil
 						break
 					end
@@ -471,9 +526,11 @@ function ENT:RunBehaviour()
 						self._InStairOverlay = false
 					end
 					self._LastFollowZ = posZ
-					local followSpeed = self._InStairOverlay and FOLLOW_SPEED_STAIR or FOLLOW_SPEED_RUN
-					self.DebugIdealSpeed = followSpeed
-					self.loco:SetDesiredSpeed(followSpeed)
+					local targetFollowSpeed = self:GetSdkHeightAdjustedSpeed(FOLLOW_SPEED_RUN)
+					self.loco:SetAcceleration(FOLLOW_ACCEL)
+					self.loco:SetDeceleration(FOLLOW_DECEL)
+					self.DebugIdealSpeed = targetFollowSpeed
+					self.loco:SetDesiredSpeed(targetFollowSpeed)
 
 					if self:GetPos():Distance(stuckPos) < 8 then
 						stuckTime = stuckTime + FrameTime()
@@ -512,6 +569,9 @@ function ENT:RunBehaviour()
 				self._MovingUphill = false
 				self._MovingOnStairs = false
 				self._InStairOverlay = false
+				self._SdkReactiveSpeedAdjust = nil
+				self._SdkSpeedPrevOrigin1 = nil
+				self._SdkSpeedPrevOrigin2 = nil
 				self._LastFollowZ = nil
 				coroutine.wait(1)
 			end
@@ -520,6 +580,9 @@ function ENT:RunBehaviour()
 			self._MovingUphill = false
 			self._MovingOnStairs = false
 			self._InStairOverlay = false
+			self._SdkReactiveSpeedAdjust = nil
+			self._SdkSpeedPrevOrigin1 = nil
+			self._SdkSpeedPrevOrigin2 = nil
 			self._LastFollowZ = nil
 			self.DebugFollowDist = -1
 			self.DebugMoveTarget = vector_origin
@@ -630,8 +693,9 @@ function ENT:Draw()
 		self._VisualZ = nil
 		self._VisualRenderZ = nil
 		self._LastGroundZ = nil
+		self._EstIkFloor = nil
 	end
-	local traceZ = self._VisualZ or self._LastGroundZ or self._VisualRenderZ or hullZ
+	local traceZ = hullZ
 
 	local seqName = self:GetSequenceName(self:GetSequence()) or ""
 	local isMovingSeq = seqName:lower():find("walk") or seqName:lower():find("run")
@@ -639,6 +703,7 @@ function ENT:Draw()
 		self._VisualZ = nil
 		self._VisualRenderZ = nil
 		self._LastGroundZ = nil
+		self._EstIkFloor = nil
 		self:DrawModel()
 		return
 	end
@@ -681,6 +746,10 @@ function ENT:Draw()
 
 	local leftHit = doTrace(lFootBone, "left", leftPlanted)
 	local rightHit = doTrace(rFootBone, "right", rightPlanted)
+	if leftHit and rightHit and math.abs(leftHit - hullZ) < 0.75 and math.abs(rightHit - hullZ) < 0.75 then
+		if leftLocalZ then self._FlatFootLocalZLeft = self._FlatFootLocalZLeft and (self._FlatFootLocalZLeft * 0.9 + leftLocalZ * 0.1) or leftLocalZ end
+		if rightLocalZ then self._FlatFootLocalZRight = self._FlatFootLocalZRight and (self._FlatFootLocalZRight * 0.9 + rightLocalZ * 0.1) or rightLocalZ end
+	end
 	if not leftHit and not rightHit then
 		printVisualDebug(self, {
 			activeFoot = activeFoot,
@@ -704,35 +773,51 @@ function ENT:Draw()
 	local totalWeight = 0
 	local weightedGroundZ = 0
 	local weightedLocalZ = 0
-	if leftHit then
+	if leftHit and leftPlanted then
 		weightedGroundZ = weightedGroundZ + leftHit * leftWeight
 		weightedLocalZ = weightedLocalZ + (leftLocalZ or 0) * leftWeight
 		totalWeight = totalWeight + leftWeight
 	end
-	if rightHit then
+	if rightHit and rightPlanted then
 		weightedGroundZ = weightedGroundZ + rightHit * rightWeight
 		weightedLocalZ = weightedLocalZ + (rightLocalZ or 0) * rightWeight
 		totalWeight = totalWeight + rightWeight
 	end
 	local activeLocalZ = (activeFoot == "left") and leftLocalZ or rightLocalZ
-	if activeHit and activeLocalZ then
+	local activePlanted = (activeFoot == "left") and leftPlanted or rightPlanted
+	if activeHit and activeLocalZ and activePlanted then
 		contactGroundZ = activeHit
 		contactLocalZ = activeLocalZ
 	elseif totalWeight > 0.01 then
 		contactGroundZ = weightedGroundZ / totalWeight
 		contactLocalZ = weightedLocalZ / totalWeight
+	elseif leftHit and leftPlanted and leftLocalZ then
+		contactGroundZ = leftHit
+		contactLocalZ = leftLocalZ
+	elseif rightHit and rightPlanted and rightLocalZ then
+		contactGroundZ = rightHit
+		contactLocalZ = rightLocalZ
 	else
 		contactGroundZ = minGroundZ or self._LastGroundZ
-		contactLocalZ = (leftHit and leftLocalZ) or (rightHit and rightLocalZ)
+		contactLocalZ = math.min(leftLocalZ or PLANTED_FOOT_Z, rightLocalZ or PLANTED_FOOT_Z, PLANTED_FOOT_Z)
 	end
 
 	if contactGroundZ and contactLocalZ then
 		contactGroundZ = math.Clamp(contactGroundZ, traceZ - STEP_HEIGHT, traceZ + STEP_HEIGHT)
+		contactLocalZ = math.Clamp(contactLocalZ, -STEP_HEIGHT, PLANTED_FOOT_Z)
 		if self._LastGroundZ and math.abs(contactGroundZ - self._LastGroundZ) < GROUND_Z_DEADZONE then
 			contactGroundZ = self._LastGroundZ
 		end
 
-		local targetRenderZ = contactGroundZ - contactLocalZ
+		local contactFoot = activeHit and activeLocalZ and activePlanted and activeFoot or nil
+		if not contactFoot then
+			if leftHit and leftPlanted and leftLocalZ then contactFoot = "left" end
+			if not contactFoot and rightHit and rightPlanted and rightLocalZ then contactFoot = "right" end
+		end
+		local footBaseline = (contactFoot == "left") and self._FlatFootLocalZLeft or self._FlatFootLocalZRight
+		footBaseline = footBaseline or math.Clamp(contactLocalZ, 0, PLANTED_FOOT_Z)
+		local footTargetZ = contactGroundZ - (contactLocalZ - footBaseline)
+		local targetRenderZ = math.Clamp(footTargetZ, hullZ - STEP_HEIGHT, hullZ)
 		local renderZ = self._VisualRenderZ or targetRenderZ
 		if math.abs(renderZ - targetRenderZ) > STEP_HEIGHT * 2 then
 			renderZ = targetRenderZ

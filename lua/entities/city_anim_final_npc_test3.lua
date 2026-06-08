@@ -1,8 +1,11 @@
 AddCSLuaFile()
 AddCSLuaFile("entities/modules/npc_debug.lua")
+AddCSLuaFile("entities/modules/studio_ik.lua")
 include("entities/modules/npc_debug.lua")
+include("entities/modules/studio_ik.lua")
 
 local NPCDebug = CityNPCs.Modules.npc_debug
+local StudioIK = CityNPCs.Modules.studio_ik
 
 ENT.Type = "nextbot"
 ENT.Base = "base_nextbot"
@@ -11,6 +14,7 @@ ENT.PrintName = "Final Anim Test NPC v3"
 ENT.Spawnable = true
 ENT.AdminOnly = false
 ENT.Author = "City NPCs"
+ENT.Editable = true
 
 ENT.Purpose = "Minimal follow NPC with SetIK(true)"
 ENT.Instructions = "Press +USE to recruit. Follows commander."
@@ -32,6 +36,10 @@ local WALK_IDLE_OVERLAY_CYCLE = 0.20
 local WALK_IDLE_OVERLAY_MAX_WEIGHT = 0.97
 local WALK_IDLE_OVERLAY_FADE_RATE = 4.0
 local WALK_TO_IDLE_DELAY = 0.15
+local VISUAL_CONTACT_RELEASE_CYCLE = 0.48
+local VISUAL_STEP_ORIGIN_INTERP_SPEED = 12
+local VISUAL_SWING_PROBE_SCALE = 4
+local VISUAL_IK_FLOOR_BLEND = 0.8
 
 local TURN_GESTURE_COOLDOWN = 0.5
 local TURN_GESTURE_MIN_DELTA = 15
@@ -43,6 +51,7 @@ local FOOTSTEP_EVENT_LEFT = 6004
 local FOOTSTEP_EVENT_RIGHT = 6005
 local FOOTSTEP_EVENT_MAT_LEFT = 6006
 local FOOTSTEP_EVENT_MAT_RIGHT = 6007
+local MALE_SHARED_ANIM_MODEL = "models/humans/male_shared.mdl"
 local modelFootCycleCache = {}
 
 local function getModelFootCycles(model)
@@ -116,6 +125,62 @@ local function getFootContactAge(ent, side)
 	return age
 end
 
+local function getFootIkRule(ent, side)
+	local cache = getModelFootCycles(ent:GetModel())
+	local seqName = ent:GetSequenceName(ent:GetSequence())
+	local footCycle = cache and cache[seqName]
+	if not footCycle or not footCycle[side] then return nil end
+	local rule, dist = StudioIK.GetClosestGroundRule(MALE_SHARED_ANIM_MODEL, seqName, footCycle[side])
+	if rule then return rule, dist end
+	return StudioIK.GetClosestGroundRule(ent:GetModel(), seqName, footCycle[side])
+end
+
+local function normalizeIkCycle(rule, cycle)
+	if rule.finish and rule.finish > 1 and cycle < rule.start then
+		return cycle + 1
+	end
+	return cycle
+end
+
+local function isCycleInIkRelease(rule, cycle)
+	if not rule then return false end
+	cycle = normalizeIkCycle(rule, cycle)
+	if cycle < rule.peak or cycle >= rule.finish then return false end
+	if cycle <= rule.tail then return true end
+	return ((cycle - rule.tail) / math.max(rule.finish - rule.tail, 0.001)) < 0.1
+end
+
+local function getTunableFloat(ent, getterName, default, minValue, maxValue)
+	local getter = ent[getterName]
+	local value = getter and getter(ent) or default
+	if not isnumber(value) then value = default end
+	if value <= 0 then value = default end
+	return math.Clamp(value, minValue, maxValue)
+end
+
+function ENT:SetupDataTables()
+	self:NetworkVar("Float", 0, "VisualContactReleaseCycle", {
+		KeyName = "visual_contact_release_cycle",
+		Edit = { type = "Float", min = 0.05, max = 1.0, order = 1, category = "Visual Step" }
+	})
+	self:NetworkVar("Float", 1, "VisualStepInterpSpeed", {
+		KeyName = "visual_step_interp_speed",
+		Edit = { type = "Float", min = 1, max = 30, order = 2, category = "Visual Step" }
+	})
+	self:NetworkVar("Float", 2, "VisualSwingProbeScale", {
+		KeyName = "visual_swing_probe_scale",
+		Edit = { type = "Float", min = 0.1, max = 12, order = 3, category = "Visual Step" }
+	})
+	self:NetworkVar("Float", 3, "VisualIkFloorBlend", {
+		KeyName = "visual_ik_floor_blend",
+		Edit = { type = "Float", min = 0.05, max = 1.0, order = 4, category = "Visual Step" }
+	})
+end
+
+function ENT:CanEditVariables(ply)
+	return IsValid(ply) and ply:IsAdmin()
+end
+
 if SERVER then
 
 function ENT:Initialize()
@@ -138,6 +203,10 @@ function ENT:Initialize()
 	self.loco:SetDeceleration(FOLLOW_DECEL)
 	self.loco:SetStepHeight(18)
 	self.loco:SetMaxYawRate(180)
+	self:SetVisualContactReleaseCycle(VISUAL_CONTACT_RELEASE_CYCLE)
+	self:SetVisualStepInterpSpeed(VISUAL_STEP_ORIGIN_INTERP_SPEED)
+	self:SetVisualSwingProbeScale(VISUAL_SWING_PROBE_SCALE)
+	self:SetVisualIkFloorBlend(VISUAL_IK_FLOOR_BLEND)
 
 	self:StartActivity(ACT_IDLE)
 
@@ -608,6 +677,42 @@ concommand.Add("citynpc_v3_debug", function(ply)
 	ent:SetDebugEnabled(ply, not ent.DebugEnabled)
 end)
 
+concommand.Remove("citynpc_v3_ikdebug")
+concommand.Add("citynpc_v3_ikdebug", function(ply, _, args)
+	if not IsValid(ply) then return end
+
+	local model = args and args[1]
+	local seqName = args and args[2]
+	local ent = ply:GetEyeTrace().Entity
+
+	if not model or model == "" then
+		model = MALE_SHARED_ANIM_MODEL
+	end
+	StudioIK.ClearCache(model)
+	if (not seqName or seqName == "") and IsValid(ent) and ent:GetClass() == "city_anim_final_npc_test3" then
+		seqName = ent:GetSequenceName(ent:GetSequence())
+		print(string.format("[StudioIK] eyeTrace entity=%s seq=%d:%s entityModel=%s", ent:GetClass(), ent:GetSequence(), tostring(seqName), tostring(ent:GetModel())))
+	end
+
+	for _, line in ipairs(StudioIK.GetDebugLines(model, seqName)) do
+		print(line)
+	end
+end)
+
+concommand.Remove("citynpc_v3_ikdump")
+concommand.Add("citynpc_v3_ikdump", function(ply, _, args)
+	if not IsValid(ply) then return end
+
+	local model = args and args[1]
+	if not model or model == "" then
+		model = MALE_SHARED_ANIM_MODEL
+	end
+	StudioIK.ClearCache(model)
+	for _, line in ipairs(StudioIK.GetDumpLines(model)) do
+		print(line)
+	end
+end)
+
 end
 
 if CLIENT then
@@ -615,6 +720,38 @@ if CLIENT then
 function ENT:CityDebugLabel()
 	return "v3-nextbot"
 end
+
+concommand.Remove("citynpc_v3_ikdebug_client")
+concommand.Add("citynpc_v3_ikdebug_client", function(_, _, args)
+	local model = args and args[1]
+	local seqName = args and args[2]
+	local ent = LocalPlayer and IsValid(LocalPlayer()) and LocalPlayer():GetEyeTrace().Entity or nil
+
+	if not model or model == "" then
+		model = MALE_SHARED_ANIM_MODEL
+	end
+	StudioIK.ClearCache(model)
+	if (not seqName or seqName == "") and IsValid(ent) and ent:GetClass() == "city_anim_final_npc_test3" then
+		seqName = ent:GetSequenceName(ent:GetSequence())
+		print(string.format("[StudioIK CLIENT] eyeTrace entity=%s seq=%d:%s entityModel=%s", ent:GetClass(), ent:GetSequence(), tostring(seqName), tostring(ent:GetModel())))
+	end
+
+	for _, line in ipairs(StudioIK.GetDebugLines(model, seqName)) do
+		print(line:gsub("%[StudioIK%]", "[StudioIK CLIENT]"))
+	end
+end)
+
+concommand.Remove("citynpc_v3_ikdump_client")
+concommand.Add("citynpc_v3_ikdump_client", function(_, _, args)
+	local model = args and args[1]
+	if not model or model == "" then
+		model = MALE_SHARED_ANIM_MODEL
+	end
+	StudioIK.ClearCache(model)
+	for _, line in ipairs(StudioIK.GetDumpLines(model)) do
+		print(line:gsub("%[StudioIKDUMP%]", "[StudioIKDUMP CLIENT]"))
+	end
+end)
 
 function ENT:Draw()
 	self:SetIK(true)
@@ -626,8 +763,10 @@ function ENT:Draw()
 	local STEP_HEIGHT = 18
 	local HULL_R = 2.5
 	local PLANTED_FOOT_Z = 5.5
-	local CONTACT_RELEASE_CYCLE = 0.48
-	local STEP_ORIGIN_INTERP_SPEED = 12
+	local CONTACT_RELEASE_CYCLE = getTunableFloat(self, "GetVisualContactReleaseCycle", VISUAL_CONTACT_RELEASE_CYCLE, 0.05, 1.0)
+	local STEP_ORIGIN_INTERP_SPEED = getTunableFloat(self, "GetVisualStepInterpSpeed", VISUAL_STEP_ORIGIN_INTERP_SPEED, 1, 30)
+	local SWING_PROBE_SCALE = getTunableFloat(self, "GetVisualSwingProbeScale", VISUAL_SWING_PROBE_SCALE, 0.1, 12)
+	local IK_FLOOR_BLEND = getTunableFloat(self, "GetVisualIkFloorBlend", VISUAL_IK_FLOOR_BLEND, 0.05, 1.0)
 	local hullPos = self:GetPos()
 	local hullZ = hullPos.z
 	if self._VisualRenderZ and math.abs(self._VisualRenderZ - hullZ) > STEP_HEIGHT * 4 then
@@ -676,7 +815,7 @@ function ENT:Draw()
 		local mat = self:GetBoneMatrix(bone)
 		if not mat then return nil end
 		local probeScale = (isMovingSeq and not planted) and getFootSwingProbeScale(self, side) or 0
-		local footPos = mat:GetTranslation() + flatForward * (probeScale * 4)
+		local footPos = mat:GetTranslation() + flatForward * (probeScale * SWING_PROBE_SCALE)
 		local tr = util.TraceHull({
 			start = Vector(footPos.x, footPos.y, traceZ + STEP_HEIGHT + 2),
 			endpos = Vector(footPos.x, footPos.y, traceZ - STEP_HEIGHT - 2),
@@ -723,8 +862,10 @@ function ENT:Draw()
 	-- targets, otherwise stair edges snap the whole model.
 	local committedHeights = {}
 	local activeAge = activeFoot and getFootContactAge(self, activeFoot) or nil
+	local activeRule = activeFoot and getFootIkRule(self, activeFoot) or nil
+	local activeCycle = self:GetCycle()
 	local activeHit = (activeFoot == "left") and leftHit or rightHit
-	if activeHit and activeAge and activeAge <= CONTACT_RELEASE_CYCLE then
+	if activeHit and ((activeRule and isCycleInIkRelease(activeRule, activeCycle)) or (activeAge and activeAge <= CONTACT_RELEASE_CYCLE)) then
 		committedHeights[#committedHeights + 1] = activeHit
 	else
 		if leftHit and leftPlanted then committedHeights[#committedHeights + 1] = leftHit end
@@ -743,7 +884,7 @@ function ENT:Draw()
 	if minGroundZ and maxGroundZ then
 		minGroundZ = math.Clamp(minGroundZ, traceZ - STEP_HEIGHT, traceZ + STEP_HEIGHT)
 		maxGroundZ = math.Clamp(maxGroundZ, traceZ - STEP_HEIGHT, traceZ + STEP_HEIGHT)
-		self._VisualEstIkFloor = (self._VisualEstIkFloor or minGroundZ) * 0.2 + minGroundZ * 0.8
+		self._VisualEstIkFloor = (self._VisualEstIkFloor or minGroundZ) * (1 - IK_FLOOR_BLEND) + minGroundZ * IK_FLOOR_BLEND
 
 		local bias = math.Clamp((maxGroundZ - minGroundZ) - STEP_HEIGHT, 0, STEP_HEIGHT)
 		local targetOffset = math.Clamp(self._VisualEstIkFloor - hullZ, -STEP_HEIGHT + bias, 0)
@@ -770,6 +911,10 @@ function ENT:Draw()
 			estZ = targetRenderZ,
 			minGroundZ = minGroundZ,
 			maxGroundZ = maxGroundZ,
+			ikRuleStart = activeRule and activeRule.start,
+			ikRulePeak = activeRule and activeRule.peak,
+			ikRuleTail = activeRule and activeRule.tail,
+			ikRuleEnd = activeRule and activeRule.finish,
 			renderZ = renderZ
 		})
 

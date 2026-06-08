@@ -85,21 +85,6 @@ local function getEventContactFoot(ent)
 	return (cycleSince(footCycle.left) < cycleSince(footCycle.right)) and "left" or "right"
 end
 
-local function getEventFootWeights(ent)
-	local cache = getModelFootCycles(ent:GetModel())
-	local footCycle = cache and cache[ent:GetSequenceName(ent:GetSequence())]
-	if not footCycle then return 1, 0 end
-
-	local cycle = ent:GetCycle()
-	local function cycleSince(eventCycle)
-		local d = cycle - eventCycle
-		if d < 0 then d = d + 1 end
-		return d
-	end
-
-	return (cycleSince(footCycle.left) < cycleSince(footCycle.right)) and 1 or 0, (cycleSince(footCycle.right) < cycleSince(footCycle.left)) and 1 or 0
-end
-
 local function getFootSwingProbeScale(ent, side)
 	local cache = getModelFootCycles(ent:GetModel())
 	local footCycle = cache and cache[ent:GetSequenceName(ent:GetSequence())]
@@ -119,6 +104,16 @@ local function getFootSwingProbeScale(ent, side)
 	if sinceOther > span then return 0 end
 
 	return math.sin(math.Clamp(sinceOther / span, 0, 1) * math.pi)
+end
+
+local function getFootContactAge(ent, side)
+	local cache = getModelFootCycles(ent:GetModel())
+	local footCycle = cache and cache[ent:GetSequenceName(ent:GetSequence())]
+	if not footCycle or not footCycle[side] then return nil end
+
+	local age = ent:GetCycle() - footCycle[side]
+	if age < 0 then age = age + 1 end
+	return age
 end
 
 if SERVER then
@@ -631,15 +626,15 @@ function ENT:Draw()
 	local STEP_HEIGHT = 18
 	local HULL_R = 2.5
 	local PLANTED_FOOT_Z = 5.5
-	local GROUND_Z_DEADZONE = 0.5
-	local RENDER_Z_RISE_SPEED = 96
-	local RENDER_Z_FALL_SPEED = 96
-	local MAX_VISUAL_STEP_LAG = 4
+	local CONTACT_RELEASE_CYCLE = 0.48
+	local STEP_ORIGIN_INTERP_SPEED = 12
 	local hullPos = self:GetPos()
 	local hullZ = hullPos.z
 	if self._VisualRenderZ and math.abs(self._VisualRenderZ - hullZ) > STEP_HEIGHT * 4 then
 		self._VisualRenderZ = nil
 		self._LastGroundZ = nil
+		self._VisualEstIkFloor = nil
+		self._VisualIkOffset = nil
 	end
 	local traceZ = hullZ
 
@@ -647,10 +642,6 @@ function ENT:Draw()
 	local isMovingSeq = seqName:lower():find("walk") or seqName:lower():find("run")
 
 	local activeFoot = isMovingSeq and (getEventContactFoot(self) or "left") or nil
-	local leftWeight, rightWeight = 0.5, 0.5
-	if isMovingSeq then
-		leftWeight, rightWeight = getEventFootWeights(self)
-	end
 	local fwd = self:GetForward()
 	local flatForward = Vector(fwd.x, fwd.y, 0):GetNormalized()
 	local function footInfo(bone)
@@ -700,10 +691,6 @@ function ENT:Draw()
 
 	local leftHit = doTrace(lFootBone, "left", leftPlanted)
 	local rightHit = doTrace(rFootBone, "right", rightPlanted)
-	if leftHit and rightHit and math.abs(leftHit - hullZ) < 0.75 and math.abs(rightHit - hullZ) < 0.75 then
-		if leftLocalZ then self._FlatFootLocalZLeft = self._FlatFootLocalZLeft and (self._FlatFootLocalZLeft * 0.9 + leftLocalZ * 0.1) or leftLocalZ end
-		if rightLocalZ then self._FlatFootLocalZRight = self._FlatFootLocalZRight and (self._FlatFootLocalZRight * 0.9 + rightLocalZ * 0.1) or rightLocalZ end
-	end
 	if not leftHit and not rightHit then
 		NPCDebug.PrintVisualZ(self, "V3ZDBG", {
 			activeFoot = activeFoot,
@@ -730,88 +717,42 @@ function ENT:Draw()
 			activeFoot = "left"
 		end
 	end
+
+	-- SDK-style visual step origin: only committed animation contact feet feed the
+	-- height adjust. Raw swing-foot traces are validation/probes, not render-origin
+	-- targets, otherwise stair edges snap the whole model.
+	local committedHeights = {}
+	local activeAge = activeFoot and getFootContactAge(self, activeFoot) or nil
 	local activeHit = (activeFoot == "left") and leftHit or rightHit
-
-	-- Build an independent visual height from model contact data. The collision
-	-- hull stair-steps, so do not use hull/local entity Z as the visual reference.
-	local contactGroundZ
-	local contactLocalZ
-	local contactFoot
-	local minGroundZ = leftHit and rightHit and math.min(leftHit, rightHit) or leftHit or rightHit
-	local maxGroundZ = leftHit and rightHit and math.max(leftHit, rightHit) or leftHit or rightHit
-	local totalWeight = 0
-	local weightedGroundZ = 0
-	local weightedLocalZ = 0
-	if leftHit and leftPlanted then
-		weightedGroundZ = weightedGroundZ + leftHit * leftWeight
-		weightedLocalZ = weightedLocalZ + (leftLocalZ or 0) * leftWeight
-		totalWeight = totalWeight + leftWeight
-	end
-	if rightHit and rightPlanted then
-		weightedGroundZ = weightedGroundZ + rightHit * rightWeight
-		weightedLocalZ = weightedLocalZ + (rightLocalZ or 0) * rightWeight
-		totalWeight = totalWeight + rightWeight
-	end
-	local activeLocalZ = (activeFoot == "left") and leftLocalZ or rightLocalZ
-	local activePlanted = (activeFoot == "left") and leftPlanted or rightPlanted
-	if activeHit and activeLocalZ and activePlanted then
-		contactGroundZ = activeHit
-		contactLocalZ = activeLocalZ
-		contactFoot = activeFoot
-	elseif totalWeight > 0.01 then
-		contactGroundZ = weightedGroundZ / totalWeight
-		contactLocalZ = weightedLocalZ / totalWeight
-	elseif leftHit and leftPlanted and leftLocalZ then
-		contactGroundZ = leftHit
-		contactLocalZ = leftLocalZ
-		contactFoot = "left"
-	elseif rightHit and rightPlanted and rightLocalZ then
-		contactGroundZ = rightHit
-		contactLocalZ = rightLocalZ
-		contactFoot = "right"
+	if activeHit and activeAge and activeAge <= CONTACT_RELEASE_CYCLE then
+		committedHeights[#committedHeights + 1] = activeHit
 	else
-		contactGroundZ = minGroundZ or self._LastGroundZ
-		contactLocalZ = math.min(leftLocalZ or PLANTED_FOOT_Z, rightLocalZ or PLANTED_FOOT_Z, PLANTED_FOOT_Z)
+		if leftHit and leftPlanted then committedHeights[#committedHeights + 1] = leftHit end
+		if rightHit and rightPlanted then committedHeights[#committedHeights + 1] = rightHit end
 	end
 
-	if isMovingSeq and leftHit and rightHit and contactGroundZ and maxGroundZ and maxGroundZ > contactGroundZ and maxGroundZ >= hullZ - 2 then
-		local highFoot = (leftHit >= rightHit) and "left" or "right"
-		local highLocalZ = (highFoot == "left") and leftLocalZ or rightLocalZ
-		local highPlanted = (highFoot == "left") and leftPlanted or rightPlanted
-		if highLocalZ and highPlanted and hullZ - contactGroundZ > STEP_HEIGHT * 0.4 then
-			contactGroundZ = maxGroundZ
-			contactLocalZ = highLocalZ
-			contactFoot = highFoot
-		end
+	local minGroundZ
+	local maxGroundZ
+	for _, height in ipairs(committedHeights) do
+		minGroundZ = minGroundZ and math.min(minGroundZ, height) or height
+		maxGroundZ = maxGroundZ and math.max(maxGroundZ, height) or height
 	end
+	minGroundZ = minGroundZ or self._LastGroundZ
+	maxGroundZ = maxGroundZ or minGroundZ
 
-	if contactGroundZ and contactLocalZ then
-		contactGroundZ = math.Clamp(contactGroundZ, traceZ - STEP_HEIGHT, traceZ + STEP_HEIGHT)
-		contactLocalZ = math.Clamp(contactLocalZ, -STEP_HEIGHT, PLANTED_FOOT_Z)
-		if self._LastGroundZ and math.abs(contactGroundZ - self._LastGroundZ) < GROUND_Z_DEADZONE then
-			contactGroundZ = self._LastGroundZ
-		end
+	if minGroundZ and maxGroundZ then
+		minGroundZ = math.Clamp(minGroundZ, traceZ - STEP_HEIGHT, traceZ + STEP_HEIGHT)
+		maxGroundZ = math.Clamp(maxGroundZ, traceZ - STEP_HEIGHT, traceZ + STEP_HEIGHT)
+		self._VisualEstIkFloor = (self._VisualEstIkFloor or minGroundZ) * 0.2 + minGroundZ * 0.8
 
-		if not contactFoot then
-			if leftHit and leftPlanted and leftLocalZ then contactFoot = "left" end
-			if not contactFoot and rightHit and rightPlanted and rightLocalZ then contactFoot = "right" end
-		end
-		local footBaseline = (contactFoot == "left") and self._FlatFootLocalZLeft or self._FlatFootLocalZRight
-		footBaseline = footBaseline or math.Clamp(contactLocalZ, 0, PLANTED_FOOT_Z)
-		local footTargetZ = contactGroundZ - (contactLocalZ - footBaseline)
-		local minRenderZ = isMovingSeq and (hullZ - MAX_VISUAL_STEP_LAG) or (hullZ - STEP_HEIGHT)
-		local targetRenderZ = math.Clamp(footTargetZ, minRenderZ, hullZ)
+		local bias = math.Clamp((maxGroundZ - minGroundZ) - STEP_HEIGHT, 0, STEP_HEIGHT)
+		local targetOffset = math.Clamp(self._VisualEstIkFloor - hullZ, -STEP_HEIGHT + bias, 0)
+		local targetRenderZ = hullZ + targetOffset
 		local renderZ = self._VisualRenderZ or targetRenderZ
-		if isMovingSeq and targetRenderZ > renderZ and hullZ - renderZ > MAX_VISUAL_STEP_LAG then
-			renderZ = targetRenderZ
-		elseif math.abs(renderZ - targetRenderZ) > STEP_HEIGHT * 2 then
-			renderZ = targetRenderZ
-		else
-			local smoothSpeed = (targetRenderZ > renderZ) and RENDER_Z_RISE_SPEED or RENDER_Z_FALL_SPEED
-			renderZ = math.Approach(renderZ, targetRenderZ, FrameTime() * smoothSpeed)
-		end
-
-		self._LastGroundZ = contactGroundZ
+		local blend = math.Clamp(FrameTime() * STEP_ORIGIN_INTERP_SPEED, 0, 1)
+		renderZ = Lerp(blend, renderZ, targetRenderZ)
+		self._VisualIkOffset = targetOffset
+		self._LastGroundZ = minGroundZ
 		self._VisualRenderZ = renderZ
 		local newPos = Vector(hullPos.x, hullPos.y, renderZ)
 		NPCDebug.PrintVisualZ(self, "V3ZDBG", {
@@ -825,7 +766,7 @@ function ENT:Draw()
 			rightLocalZ = rightLocalZ,
 			rightWorldZ = rightWorldZ,
 			rightHit = rightHit,
-			groundZ = contactGroundZ,
+			groundZ = minGroundZ,
 			estZ = targetRenderZ,
 			minGroundZ = minGroundZ,
 			maxGroundZ = maxGroundZ,

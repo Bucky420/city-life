@@ -5,6 +5,7 @@ include("entities/modules/move.lua")
 include("entities/modules/z.lua")
 include("entities/modules/gestures.lua")
 include("entities/modules/life.lua")
+include("entities/modules/npc_debug.lua")
  
 list.Set("NPC", "city_npc", {
     Name = "City NPC", 
@@ -56,6 +57,7 @@ if SERVER then
     AddCSLuaFile("entities/modules/z.lua")
     AddCSLuaFile("entities/modules/gestures.lua")
     AddCSLuaFile("entities/modules/life.lua")
+    AddCSLuaFile("entities/modules/npc_debug.lua")
 
     include("city_npcs/navigation.lua")
     AddCSLuaFile("city_npcs/navigation.lua")

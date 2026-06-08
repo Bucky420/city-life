@@ -1,11 +1,14 @@
 AddCSLuaFile()
 AddCSLuaFile("entities/modules/npc_debug.lua")
 AddCSLuaFile("entities/modules/studio_ik.lua")
+AddCSLuaFile("entities/modules/foot_ik.lua")
 include("entities/modules/npc_debug.lua")
 include("entities/modules/studio_ik.lua")
+include("entities/modules/foot_ik.lua")
 
 local NPCDebug = CityNPCs.Modules.npc_debug
 local StudioIK = CityNPCs.Modules.studio_ik
+local FootIK = CityNPCs.Modules.foot_ik
 
 ENT.Type = "nextbot"
 ENT.Base = "base_nextbot"
@@ -31,7 +34,6 @@ local SDK_HEIGHT_ADJUST_DOWN_MIN = 0.8
 local SDK_PREDICTIVE_LOOKAHEAD = 96
 local SDK_LOCAL_STEP_SIZE = 16
 local SDK_MOVE_HEIGHT_EPSILON = 0.0625
-local FOLLOW_REPATH_INTERVAL = 0.25
 local WALK_IDLE_OVERLAY_CYCLE = 0.20
 local WALK_IDLE_OVERLAY_MAX_WEIGHT = 0.97
 local WALK_IDLE_OVERLAY_FADE_RATE = 4.0
@@ -130,24 +132,10 @@ local function getFootIkRule(ent, side)
 	local seqName = ent:GetSequenceName(ent:GetSequence())
 	local footCycle = cache and cache[seqName]
 	if not footCycle or not footCycle[side] then return nil end
-	local rule, dist = StudioIK.GetClosestGroundRule(MALE_SHARED_ANIM_MODEL, seqName, footCycle[side])
+	local poseValues = ent._VisualPoseValues
+	local rule, dist = StudioIK.GetBlendedGroundRule(MALE_SHARED_ANIM_MODEL, seqName, footCycle[side], poseValues)
 	if rule then return rule, dist end
-	return StudioIK.GetClosestGroundRule(ent:GetModel(), seqName, footCycle[side])
-end
-
-local function normalizeIkCycle(rule, cycle)
-	if rule.finish and rule.finish > 1 and cycle < rule.start then
-		return cycle + 1
-	end
-	return cycle
-end
-
-local function isCycleInIkRelease(rule, cycle)
-	if not rule then return false end
-	cycle = normalizeIkCycle(rule, cycle)
-	if cycle < rule.peak or cycle >= rule.finish then return false end
-	if cycle <= rule.tail then return true end
-	return ((cycle - rule.tail) / math.max(rule.finish - rule.tail, 0.001)) < 0.1
+	return StudioIK.GetBlendedGroundRule(ent:GetModel(), seqName, footCycle[side], poseValues)
 end
 
 local function getTunableFloat(ent, getterName, default, minValue, maxValue)
@@ -156,6 +144,50 @@ local function getTunableFloat(ent, getterName, default, minValue, maxValue)
 	if not isnumber(value) then value = default end
 	if value <= 0 then value = default end
 	return math.Clamp(value, minValue, maxValue)
+end
+
+local function getNormalizedPoseParameter(ent, name)
+	local value = ent:GetPoseParameter(name)
+	if not isnumber(value) then return nil end
+
+	-- GetPoseParameter is already normalized on the client, but returns the
+	-- actual pose range on the server. Studio_SeqAnims expects normalized input.
+	if SERVER and ent.GetPoseParameterRange then
+		local minValue, maxValue = ent:GetPoseParameterRange(name)
+		if isnumber(minValue) and isnumber(maxValue) and math.abs(maxValue - minValue) > 0.0001 then
+			value = (value - minValue) / (maxValue - minValue)
+		end
+	end
+
+	return math.Clamp(value, 0, 1)
+end
+
+local function getPoseRangeDebug(ent, name)
+	if not ent.GetPoseParameterRange then return "?:?" end
+	local minValue, maxValue = ent:GetPoseParameterRange(name)
+	return tostring(minValue) .. ":" .. tostring(maxValue)
+end
+
+local function refreshVisualPoseValues(ent)
+	if not ent.GetPoseParameter then return nil end
+	local seqName = ent:GetSequenceName(ent:GetSequence())
+	local seq = StudioIK.GetSequence(MALE_SHARED_ANIM_MODEL, seqName) or StudioIK.GetSequence(ent:GetModel(), seqName)
+	if not seq or not seq.paramIndex then return nil end
+
+	local values = {}
+	local data = StudioIK.LoadModel(MALE_SHARED_ANIM_MODEL) or StudioIK.LoadModel(ent:GetModel())
+	for _, poseIndex in ipairs(seq.paramIndex) do
+		local pose = data and data.poseParams and data.poseParams[poseIndex]
+		if pose and pose.name and pose.name ~= "" then
+			local value = getNormalizedPoseParameter(ent, pose.name)
+			if isnumber(value) then
+				values[pose.name] = value
+				values[poseIndex] = value
+			end
+		end
+	end
+	ent._VisualPoseValues = values
+	return values
 end
 
 function ENT:SetupDataTables()
@@ -214,6 +246,7 @@ function ENT:Initialize()
 	self.NextTurnTime = 0
 	self.DebugEnabled = false
 	self.NextDebugPrint = 0
+	self.NextPoseDebugPrint = 0
 	self.DebugLastPos = self:GetPos()
 	self.DebugLastTime = CurTime()
 	self.DebugMoveTarget = vector_origin
@@ -227,6 +260,54 @@ end
 
 function ENT:PrintDebugLine()
 	NPCDebug.PrintServerLine(self)
+end
+
+function ENT:_MoveXY(moveX, moveY, playbackRate)
+	moveX = math.Clamp(tonumber(moveX) or 0, -1, 1)
+	moveY = math.Clamp(tonumber(moveY) or 0, -1, 1)
+	playbackRate = math.max(tonumber(playbackRate) or 1, 0)
+
+	if self.SetPoseParameter then
+		self:SetPoseParameter("move_x", moveX)
+		self:SetPoseParameter("move_y", moveY)
+		self:SetPoseParameter("move_yaw", math.deg(math.atan2(moveY, moveX)))
+		if self.InvalidateBoneCache then self:InvalidateBoneCache() end
+	end
+
+	self:SetPlaybackRate(playbackRate)
+	self:FrameAdvance()
+
+	if self.DebugEnabled and CurTime() >= (self.NextPoseDebugPrint or 0) then
+		self.NextPoseDebugPrint = CurTime() + 0.25
+		print(string.format(
+			"[V3POSESV #%d] seq=%d:%s inX=%.3f inY=%.3f pb=%.2f getX=%s getY=%s getYaw=%s rangeX=%s rangeY=%s rangeYaw=%s",
+			self:EntIndex(), self:GetSequence(), tostring(self:GetSequenceName(self:GetSequence())), moveX, moveY, playbackRate,
+			tostring(self:GetPoseParameter("move_x")), tostring(self:GetPoseParameter("move_y")), tostring(self:GetPoseParameter("move_yaw")),
+			getPoseRangeDebug(self, "move_x"), getPoseRangeDebug(self, "move_y"), getPoseRangeDebug(self, "move_yaw")
+		))
+	end
+end
+
+function ENT:RunMoveXYClone(wantMove, speed)
+	if not wantMove then
+		self:_MoveXY(0, 0, 1)
+		return
+	end
+
+	local vel = self.loco:GetVelocity()
+	local moveSpeed = math.max(speed or 0, 0)
+	local denom = math.max(FOLLOW_SPEED_WALK, 1)
+	local moveX = self:GetForward():Dot(vel) / denom
+	local moveY = self:GetRight():Dot(vel) / denom
+	local groundSpeed = self.GetSequenceGroundSpeed and self:GetSequenceGroundSpeed(self:GetSequence()) or FOLLOW_SPEED_WALK
+	local playbackRate = FOLLOW_SPEED_WALK / math.max(groundSpeed, 1)
+
+	if moveSpeed <= 1 then
+		moveX = 1
+		moveY = 0
+	end
+
+	self:_MoveXY(moveX, moveY, playbackRate)
 end
 
 function ENT:BodyUpdate()
@@ -263,7 +344,8 @@ function ENT:BodyUpdate()
 
 	self._WalkIdleOverlayWanted = wantMove and self._InStairOverlay
 	self._WalkIdleOverlayMoveSpeed = speed
-	self:BodyMoveXY()
+	self:RunMoveXYClone(wantMove, speed)
+	refreshVisualPoseValues(self)
 	self:PrintDebugLine()
 end
 
@@ -579,11 +661,7 @@ function ENT:RunBehaviour()
 				self.loco:SetAcceleration(FOLLOW_ACCEL)
 				self.loco:SetDeceleration(FOLLOW_DECEL)
 				self.loco:SetDesiredSpeed(FOLLOW_SPEED_WALK)
-				local path = Path("Chase")
-				path:SetMinLookAheadDistance(300)
-				path:SetGoalTolerance(FOLLOW_STOP_DIST)
-				self._FollowPath = path
-				local nextRepath = 0
+				self._FollowPath = nil
 
 				local stuckPos = self:GetPos()
 				local stuckTime = 0
@@ -603,10 +681,6 @@ function ENT:RunBehaviour()
 					end
 
 					self.loco:FaceTowards(cmdPos)
-					if CurTime() >= nextRepath then
-						path:Chase(self, self.Commander)
-						nextRepath = CurTime() + FOLLOW_REPATH_INTERVAL
-					end
 
 					local targetFollowSpeed = self:GetSdkHeightAdjustedSpeed(FOLLOW_SPEED_RUN)
 					local uphill = self:IsMovingUphill(cmdPos)
@@ -636,11 +710,7 @@ function ENT:RunBehaviour()
 						break
 					end
 
-					if path:IsValid() then
-						path:Update(self)
-					else
-						self.loco:Approach(cmdPos, 1)
-					end
+					self.loco:Approach(cmdPos, 1)
 					if self.loco:IsStuck() then
 						self:HandleStuck()
 						break
@@ -857,27 +927,25 @@ function ENT:Draw()
 		end
 	end
 
-	-- SDK-style visual step origin: only committed animation contact feet feed the
-	-- height adjust. Raw swing-foot traces are validation/probes, not render-origin
-	-- targets, otherwise stair edges snap the whole model.
-	local committedHeights = {}
-	local activeAge = activeFoot and getFootContactAge(self, activeFoot) or nil
-	local activeRule = activeFoot and getFootIkRule(self, activeFoot) or nil
-	local activeCycle = self:GetCycle()
-	local activeHit = (activeFoot == "left") and leftHit or rightHit
-	if activeHit and ((activeRule and isCycleInIkRelease(activeRule, activeCycle)) or (activeAge and activeAge <= CONTACT_RELEASE_CYCLE)) then
-		committedHeights[#committedHeights + 1] = activeHit
-	else
-		if leftHit and leftPlanted then committedHeights[#committedHeights + 1] = leftHit end
-		if rightHit and rightPlanted then committedHeights[#committedHeights + 1] = rightHit end
-	end
-
-	local minGroundZ
-	local maxGroundZ
-	for _, height in ipairs(committedHeights) do
-		minGroundZ = minGroundZ and math.min(minGroundZ, height) or height
-		maxGroundZ = maxGroundZ and math.max(maxGroundZ, height) or height
-	end
+	-- SDK-style visual step origin: parsed rules drive a small per-foot latch
+	-- state, while traces only provide ground heights for active contact windows.
+	local leftRule = getFootIkRule(self, "left")
+	local rightRule = getFootIkRule(self, "right")
+	local activeRule = (activeFoot == "left") and leftRule or rightRule
+	local committedHeights = FootIK.GetCommittedHeights(self, {
+		activeFoot = activeFoot,
+		cycle = self:GetCycle(),
+		fallbackWindow = CONTACT_RELEASE_CYCLE,
+		leftHit = leftHit,
+		rightHit = rightHit,
+		leftRule = leftRule,
+		rightRule = rightRule,
+		leftAge = getFootContactAge(self, "left"),
+		rightAge = getFootContactAge(self, "right"),
+		leftPlanted = leftPlanted,
+		rightPlanted = rightPlanted
+	})
+	local minGroundZ, maxGroundZ = FootIK.MinMax(committedHeights)
 	minGroundZ = minGroundZ or self._LastGroundZ
 	maxGroundZ = maxGroundZ or minGroundZ
 
@@ -915,6 +983,8 @@ function ENT:Draw()
 			ikRulePeak = activeRule and activeRule.peak,
 			ikRuleTail = activeRule and activeRule.tail,
 			ikRuleEnd = activeRule and activeRule.finish,
+			ikRuleBlend = activeRule and activeRule.blendSource,
+			ikRuleWeight = activeRule and activeRule.blendWeight,
 			renderZ = renderZ
 		})
 

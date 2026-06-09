@@ -39,6 +39,11 @@ function Mod.FormatNumber(v)
 	return v and string.format("%.1f", v) or "?"
 end
 
+local function fmtBool(v)
+	if v == nil then return "?" end
+	return tostring(v)
+end
+
 function Mod.GetEntityLabel(ent)
 	if not IsValid(ent) then return "invalid" end
 	if ent.CityDebugLabel then return ent:CityDebugLabel() end
@@ -80,6 +85,9 @@ function Mod.SetServerEnabled(ent, ply, enabled, label)
 	ent.DebugOwner = enabled and ply or nil
 	ent.NextDebugPrint = 0
 	ent.DebugSaveProbePrinted = false
+	if ent.SetNWBool then
+		ent:SetNWBool("CityNPCDebugEnabled", enabled)
+	end
 	print("[" .. tostring(label or Mod.GetEntityLabel(ent)) .. "] Debug " .. (enabled and "ON" or "OFF") .. " for #" .. ent:EntIndex())
 end
 
@@ -98,6 +106,13 @@ local function getEntitySpeedSinceLastDebug(ent, pos, now)
 	return Vector(posDelta.x, posDelta.y, 0):Length() / dt, posDelta.z / dt
 end
 
+local function countTableKeys(t)
+	if not istable(t) then return -1 end
+	local n = 0
+	for _ in pairs(t) do n = n + 1 end
+	return n
+end
+
 local function formatGroundEntity(ent)
 	return IsValid(ent) and (ent:GetClass() .. "#" .. ent:EntIndex()) or "none"
 end
@@ -107,6 +122,55 @@ local function fmtProbeValue(v)
 	if isentity(v) and IsValid(v) then return v:GetClass() .. "#" .. v:EntIndex() end
 	if v == NULL then return "NULL" end
 	return tostring(v)
+end
+
+local function getInternalValue(ent, name)
+	if not ent.GetInternalVariable then return nil end
+
+	local ok, value = pcall(ent.GetInternalVariable, ent, name)
+	if ok then return value end
+	return nil
+end
+
+local function getGroundTraceZ(ent, pos)
+	local mins, maxs = ent:GetCollisionBounds()
+	local tr = util.TraceHull({
+		start = pos + Vector(0, 0, 4),
+		endpos = pos - Vector(0, 0, 64),
+		mins = mins,
+		maxs = Vector(maxs.x, maxs.y, 0),
+		filter = ent,
+		mask = MASK_NPCSOLID
+	})
+
+	return tr.Hit and tr.HitPos.z or nil
+end
+
+local function getV5VisualDebugString(ent, pos)
+	local estOffset = getInternalValue(ent, "m_flEstIkOffset")
+	local estFloor = getInternalValue(ent, "m_flEstIkFloor")
+	local minHeight = getInternalValue(ent, "m_flIKGroundMinHeight")
+	local maxHeight = getInternalValue(ent, "m_flIKGroundMaxHeight")
+	local contactTime = getInternalValue(ent, "m_flIKGroundContactTime")
+	local renderOrigin = getInternalValue(ent, "m_RenderOrigin")
+	local renderZ = isvector(renderOrigin) and renderOrigin.z or nil
+	if not renderZ and isnumber(estOffset) then
+		renderZ = pos.z + estOffset
+	end
+
+	local groundZ = getGroundTraceZ(ent, pos)
+	return string.format(
+		"visual=renderZ=%s rDelta=%s groundZ=%s estFloor=%s estOff=%s minZ=%s maxZ=%s contactAge=%s renderOrigin=%s",
+		Mod.FormatNumber(renderZ),
+		Mod.FormatNumber(renderZ and (renderZ - pos.z)),
+		Mod.FormatNumber(groundZ),
+		Mod.FormatNumber(estFloor),
+		Mod.FormatNumber(estOffset),
+		Mod.FormatNumber(minHeight),
+		Mod.FormatNumber(maxHeight),
+		Mod.FormatNumber(isnumber(contactTime) and (CurTime() - contactTime) or nil),
+		isvector(renderOrigin) and Mod.FormatVector(renderOrigin) or tostring(renderOrigin or "?")
+	)
 end
 
 local function getV5InternalProbeString(ent)
@@ -201,21 +265,27 @@ local function printV5ServerLine(ent)
 
 	local pos = ent:GetPos()
 	local now = CurTime()
-	local manualSpeed = getEntitySpeedSinceLastDebug(ent, pos, now)
+	local manualSpeed, zSpeed = getEntitySpeedSinceLastDebug(ent, pos, now)
 	local moveVel = ent.GetMoveVelocity and ent:GetMoveVelocity() or vector_origin
 	local moveSpeed = moveVel:Length2D()
+	local moveVelZ = isvector(moveVel) and moveVel.z or 0
 	local groundEnt = ent.GetGroundEntity and ent:GetGroundEntity() or NULL
 	local groundSpeedVel = ent.GetGroundSpeedVelocity and ent:GetGroundSpeedVelocity() or vector_origin
 	local stepHeight = ent.GetStepHeight and ent:GetStepHeight() or -1
+	local onGround = ent.IsOnGround and ent:IsOnGround() or false
 	local npcMoving = ent.IsMoving and ent:IsMoving() or false
 	local hasObstacles = ent.HasObstacles and ent:HasObstacles() or false
 	local curWaypoint = ent.GetCurWaypointPos and ent:GetCurWaypointPos() or nil
 	local nextWaypoint = ent.GetNextWaypointPos and ent:GetNextWaypointPos() or nil
 	local goalPos = ent.GetGoalPos and ent:GetGoalPos() or nil
 	local pathDist = ent.GetPathDistanceToGoal and ent:GetPathDistanceToGoal() or -1
+	local arrivalSpeed = ent.GetArrivalSpeed and ent:GetArrivalSpeed() or -1
+	local moveDelay = ent.GetMoveDelay and ent:GetMoveDelay() or -1
 	local fwd = ent:GetForward()
 	local forwardSpeed = moveVel.x * fwd.x + moveVel.y * fwd.y
 	local idealSpeed = ent.GetIdealMoveSpeed and ent:GetIdealMoveSpeed() or -1
+	local idealAct = ent.GetIdealActivity and ent:GetIdealActivity() or -1
+	local curAct = ent.GetActivity and ent:GetActivity() or -1
 	local moveAct = ent.GetMovementActivity and ent:GetMovementActivity() or "?"
 	local moveSeq = ent.GetMovementSequence and ent:GetMovementSequence() or -1
 	local target = ent.DebugMoveTarget or vector_origin
@@ -223,23 +293,33 @@ local function printV5ServerLine(ent)
 	local anim = Mod.GetAnimSegment(ent)
 	local moveInterval = ent.GetMoveInterval and ent:GetMoveInterval() or -1
 	local navType = ent.GetNavType and ent:GetNavType() or -1
+	local curSchedule = ent.GetCurrentSchedule and ent:GetCurrentSchedule() or -1
+	local hullType = ent.GetHullType and ent:GetHullType() or -1
+	local npcState = ent.GetNPCState and ent:GetNPCState() or -1
+	local seqCount = ent.GetSequenceCount and ent:GetSequenceCount() or -1
+	local hasBoneManip = ent.HasBoneManipulations and ent:HasBoneManipulations() or false
+	local networkOrigin = ent.GetNetworkOrigin and ent:GetNetworkOrigin() or nil
+	local keyValues = ent.GetKeyValues and ent:GetKeyValues() or nil
+	local hookKeyValues = ent.DebugKeyValues
 	local commander = ent.Commander
 	local cmdValid = IsValid(commander)
 	local cmdDist = cmdValid and pos:Distance(commander:GetPos()) or -1
 	local internalProbe = getV5InternalProbeString(ent)
+	local visualDebug = getV5VisualDebugString(ent, pos)
 	local stateKey = string.format("%s:%s:%s:%d:%s:%s", tostring(cmdValid), tostring(ent.StockMoveActive), tostring(npcMoving), math.floor(pos.z + 0.5), tostring(moveAct), anim.seqName)
 	if Mod.SuppressStill(ent, "_CityV5ServerDebug", moveSpeed > SERVER_DEBUG_STILL_SPEED or manualSpeed > SERVER_DEBUG_STILL_SPEED, stateKey, SERVER_DEBUG_STILL_MAX_SAMPLES) then return end
 
 	print(string.format(
-		"[V5DBG #%d] ts=%s speed=%.1f fwd=%.1f actual=%.1f desired=%.1f anim=%.1f follow=%s stock=%s cmdDist=%.1f tgtDist=%.1f originZ=%.1f mvVel=%.1f spd=%.1f ideal=%.1f tgtZ=%.1f %s mvAct=%s mvSeq=%s mint=%.3f nav=%s schedIdle=%s isnpc=%s npcMoving=%s hasObs=%s stepH=%.1f gEnt=%s gSpdVel=%.1f curWpZ=%s nextWpZ=%s goalZ=%s pathDist=%.1f internal=%s",
-		ent:EntIndex(), Mod.Timestamp(), moveSpeed, forwardSpeed, manualSpeed, idealSpeed, anim.seqGroundSpeed, tostring(cmdValid), tostring(ent.StockMoveActive), cmdDist, targetDist,
-		pos.z, moveSpeed, manualSpeed, idealSpeed, target.z, anim.text, tostring(moveAct), tostring(moveSeq), moveInterval, tostring(navType),
-		tostring(ent:IsCurrentSchedule(SCHED_IDLE_STAND)), tostring(ent:IsNPC()),
-		tostring(npcMoving), tostring(hasObstacles), stepHeight,
+		"[V5DBG #%d] ts=%s speed=%.1f fwd=%.1f actual=%.1f zVel=%.1f desired=%.1f arrive=%.1f mvDelay=%.3f anim=%.1f follow=%s stock=%s cmdDist=%.1f tgtDist=%.1f originZ=%.1f netZ=%s mvVel=%.1f mvVelZ=%.1f spd=%.1f ideal=%.1f tgtZ=%.1f %s act=%s idealAct=%s mvAct=%s mvSeq=%s sched=%s mint=%.3f nav=%s hullType=%s npcState=%s schedIdle=%s isnpc=%s onGround=%s npcMoving=%s hasObs=%s stepH=%.1f seqCount=%s boneManip=%s kv=%d kvHook=%d gEnt=%s gSpdVel=%.1f curWpZ=%s nextWpZ=%s goalZ=%s pathDist=%.1f %s internal=%s",
+		ent:EntIndex(), Mod.Timestamp(), moveSpeed, forwardSpeed, manualSpeed, zSpeed, idealSpeed, arrivalSpeed, moveDelay, anim.seqGroundSpeed, tostring(cmdValid), tostring(ent.StockMoveActive), cmdDist, targetDist,
+		pos.z, networkOrigin and string.format("%.1f", networkOrigin.z) or "?", moveSpeed, moveVelZ, manualSpeed, idealSpeed, target.z, anim.text,
+		tostring(curAct), tostring(idealAct), tostring(moveAct), tostring(moveSeq), tostring(curSchedule), moveInterval, tostring(navType), tostring(hullType), tostring(npcState),
+		tostring(ent:IsCurrentSchedule(SCHED_IDLE_STAND)), tostring(ent:IsNPC()), tostring(onGround),
+		tostring(npcMoving), tostring(hasObstacles), stepHeight, tostring(seqCount), tostring(hasBoneManip), countTableKeys(keyValues), countTableKeys(hookKeyValues),
 		formatGroundEntity(groundEnt), groundSpeedVel:Length2D(),
 		curWaypoint and string.format("%.1f", curWaypoint.z) or "?",
 		nextWaypoint and string.format("%.1f", nextWaypoint.z) or "?",
-		goalPos and string.format("%.1f", goalPos.z) or "?", pathDist, internalProbe
+		goalPos and string.format("%.1f", goalPos.z) or "?", pathDist, visualDebug, internalProbe
 	))
 end
 
@@ -409,6 +489,7 @@ function Mod.PrintVisualZ(ent, tag, data, interval)
 	local lastTime = ent._CityVisualDebugLastTime or now
 	local posDelta = ent:GetPos() - lastPos
 	local visualSpeed = Vector(posDelta.x, posDelta.y, 0):Length() / math.max(now - lastTime, 0.001)
+	local visualZSpeed = posDelta.z / math.max(now - lastTime, 0.001)
 	ent._CityVisualDebugLastPos = ent:GetPos()
 	ent._CityVisualDebugLastTime = now
 	local seq = ent:GetSequence()
@@ -450,11 +531,13 @@ function Mod.PrintVisualZ(ent, tag, data, interval)
 	if Mod.SuppressStill(ent, "_CityVisualDebug" .. label, false, stateKey, VISUAL_DEBUG_STILL_MAX_SAMPLES) then return end
 
 	print(string.format(
-		"[%s #%d] seq=%d:%s cycle=%.3f hullZ=%s renderZ=%s rDelta=%s active=%s groundZ=%s estZ=%s minZ=%s maxZ=%s ikStart=%s ikPeak=%s ikTail=%s ikEnd=%s ikBlend=%s ikWeight=%s poseNorm=%s Lloc=%s Lw=%s Lhit=%s Rloc=%s Rw=%s Rhit=%s footXY=%s foot3D=%s footDz=%s Lknee=%s Rknee=%s Lthigh=%s Rthigh=%s Lshin=%s Rshin=%s",
-		label, ent:EntIndex(), seq, seqName, cycle, fmt(hullZ), fmt(data.renderZ), fmt(data.renderZ and (data.renderZ - hullZ)), tostring(data.activeFoot or "?"),
+		"[%s #%d] seq=%d:%s cycle=%.3f hullZ=%s netZ=%s renderZ=%s rDelta=%s speed=%.1f zVel=%.1f onGround=%s seqCount=%s boneManip=%s active=%s groundZ=%s estZ=%s minZ=%s maxZ=%s ikStart=%s ikPeak=%s ikTail=%s ikEnd=%s ikBlend=%s ikWeight=%s poseNorm=%s Lloc=%s Lw=%s Lhit=%s Lfrac=%s LnormZ=%s Lsolid=%s Lworld=%s Rloc=%s Rw=%s Rhit=%s Rfrac=%s RnormZ=%s Rsolid=%s Rworld=%s footXY=%s foot3D=%s footDz=%s Lknee=%s Rknee=%s Lthigh=%s Rthigh=%s Lshin=%s Rshin=%s",
+		label, ent:EntIndex(), seq, seqName, cycle, fmt(hullZ), fmt(data.networkZ), fmt(data.renderZ), fmt(data.renderZ and (data.renderZ - hullZ)), visualSpeed, visualZSpeed,
+		fmtBool(data.onGround), tostring(data.sequenceCount or "?"), fmtBool(data.hasBoneManipulations), tostring(data.activeFoot or "?"),
 		fmt(data.groundZ), fmt(data.estZ), fmt(data.minGroundZ), fmt(data.maxGroundZ),
 		fmt(data.ikRuleStart), fmt(data.ikRulePeak), fmt(data.ikRuleTail), fmt(data.ikRuleEnd), tostring(data.ikRuleBlend or "?"), fmt(data.ikRuleWeight), tostring(data.poseDebug or "?"),
-		fmt(data.leftLocalZ), fmt(data.leftWorldZ), fmt(data.leftHit), fmt(data.rightLocalZ), fmt(data.rightWorldZ), fmt(data.rightHit),
+		fmt(data.leftLocalZ), fmt(data.leftWorldZ), fmt(data.leftHit), fmt(data.leftFraction), fmt(data.leftNormalZ), fmtBool(data.leftStartSolid), fmtBool(data.leftHitWorld),
+		fmt(data.rightLocalZ), fmt(data.rightWorldZ), fmt(data.rightHit), fmt(data.rightFraction), fmt(data.rightNormalZ), fmtBool(data.rightStartSolid), fmtBool(data.rightHitWorld),
 		fmt(data.footDistXY), fmt(data.footDist3D), fmt(data.footDeltaZ),
 		fmt(lKnee), fmt(rKnee), fmt(lThighPitch), fmt(rThighPitch), fmt(lShinPitch), fmt(rShinPitch)
 	))

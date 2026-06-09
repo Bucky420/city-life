@@ -55,8 +55,14 @@ function ENT:Initialize()
 	self.DebugFollowDist = -1
 	self.DebugMoveTarget = vector_origin
 	self.DebugSaveProbePrinted = false
+	self.DebugKeyValues = {}
 
 	NPCDebug.PrintSpawnHull(self, "v5-base_ai")
+end
+
+function ENT:KeyValue(key, value)
+	self.DebugKeyValues = self.DebugKeyValues or {}
+	self.DebugKeyValues[tostring(key)] = tostring(value)
 end
 
 function ENT:SetDebugEnabled(ply, enabled)
@@ -239,6 +245,41 @@ end
 
 if CLIENT then
 
+local FOOT_TRACE_RADIUS = 2.5
+local FOOT_TRACE_HEIGHT = 20
+
+local function getFootData(ent, side)
+	local bone = ent:LookupBone("ValveBiped.Bip01_" .. side .. "_Foot")
+	if not bone or bone < 0 then return nil end
+
+	local mat = ent:GetBoneMatrix(bone)
+	if not mat then return nil end
+
+	local footPos = mat:GetTranslation()
+	local tr = util.TraceHull({
+		start = footPos + Vector(0, 0, FOOT_TRACE_HEIGHT),
+		endpos = footPos - Vector(0, 0, FOOT_TRACE_HEIGHT),
+		mins = Vector(-FOOT_TRACE_RADIUS, -FOOT_TRACE_RADIUS, 0),
+		maxs = Vector(FOOT_TRACE_RADIUS, FOOT_TRACE_RADIUS, FOOT_TRACE_RADIUS * 2),
+		filter = ent,
+		mask = MASK_SOLID
+	})
+
+	return {
+		worldPos = footPos,
+		localZ = ent:WorldToLocal(footPos).z,
+		worldZ = footPos.z,
+		hitZ = tr.Hit and tr.HitPos.z or nil,
+		fraction = tr.Fraction,
+		normalZ = tr.HitNormal and tr.HitNormal.z or nil,
+		startSolid = tr.StartSolid,
+		allSolid = tr.AllSolid,
+		hitWorld = tr.HitWorld,
+		hitNonWorld = tr.HitNonWorld,
+		hitEntity = IsValid(tr.Entity) and (tr.Entity:GetClass() .. "#" .. tr.Entity:EntIndex()) or (tr.HitWorld and "world" or "none")
+	}
+end
+
 function ENT:Initialize()
 	if BaseClass.Initialize then
 		BaseClass.Initialize(self)
@@ -251,6 +292,61 @@ end
 function ENT:Draw()
 	self:SetIK(true)
 	self:SetupBones()
+
+	if self:GetNWBool("CityNPCDebugEnabled", false) then
+		local leftFoot = getFootData(self, "L")
+		local rightFoot = getFootData(self, "R")
+		local renderOrigin = self.GetRenderOrigin and self:GetRenderOrigin() or nil
+		local renderZ = isvector(renderOrigin) and renderOrigin.z or nil
+		local networkOrigin = self.GetNetworkOrigin and self:GetNetworkOrigin() or nil
+		local leftHit = leftFoot and leftFoot.hitZ
+		local rightHit = rightFoot and rightFoot.hitZ
+		local minHit = leftHit and rightHit and math.min(leftHit, rightHit) or (leftHit or rightHit)
+		local maxHit = leftHit and rightHit and math.max(leftHit, rightHit) or (leftHit or rightHit)
+		local onGround
+		if self.IsOnGround then
+			onGround = self:IsOnGround()
+		end
+		local hasBoneManipulations
+		if self.HasBoneManipulations then
+			hasBoneManipulations = self:HasBoneManipulations()
+		end
+		local footDistXY, footDist3D, footDeltaZ
+		if leftFoot and rightFoot then
+			local footDelta = leftFoot.worldPos - rightFoot.worldPos
+			footDistXY = Vector(footDelta.x, footDelta.y, 0):Length()
+			footDist3D = footDelta:Length()
+			footDeltaZ = leftFoot.worldZ - rightFoot.worldZ
+		end
+		NPCDebug.PrintVisualZ(self, "V5ZDBG", {
+			renderZ = renderZ,
+			networkZ = isvector(networkOrigin) and networkOrigin.z or nil,
+			onGround = onGround,
+			sequenceCount = self.GetSequenceCount and self:GetSequenceCount() or nil,
+			hasBoneManipulations = hasBoneManipulations,
+			groundZ = minHit,
+			minGroundZ = minHit,
+			maxGroundZ = maxHit,
+			leftLocalZ = leftFoot and leftFoot.localZ,
+			leftWorldZ = leftFoot and leftFoot.worldZ,
+			leftHit = leftHit,
+			leftFraction = leftFoot and leftFoot.fraction,
+			leftNormalZ = leftFoot and leftFoot.normalZ,
+			leftStartSolid = leftFoot and leftFoot.startSolid,
+			leftHitWorld = leftFoot and leftFoot.hitWorld,
+			rightLocalZ = rightFoot and rightFoot.localZ,
+			rightWorldZ = rightFoot and rightFoot.worldZ,
+			rightHit = rightHit,
+			rightFraction = rightFoot and rightFoot.fraction,
+			rightNormalZ = rightFoot and rightFoot.normalZ,
+			rightStartSolid = rightFoot and rightFoot.startSolid,
+			rightHitWorld = rightFoot and rightFoot.hitWorld,
+			footDistXY = footDistXY,
+			footDist3D = footDist3D,
+			footDeltaZ = footDeltaZ
+		})
+	end
+
 	self:DrawModel()
 end
 

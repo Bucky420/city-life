@@ -35,11 +35,13 @@ local SDK_PREDICTIVE_LOOKAHEAD = 96
 local SDK_LOCAL_STEP_SIZE = 16
 local SDK_MOVE_HEIGHT_EPSILON = 0.0625
 local WALK_IDLE_OVERLAY_CYCLE = 0.20
+local WALK_IDLE_OVERLAY_MIN_WEIGHT = 0.25
 local WALK_IDLE_OVERLAY_MAX_WEIGHT = 0.97
 local WALK_IDLE_OVERLAY_FADE_RATE = 4.0
 local WALK_TO_IDLE_DELAY = 0.15
-local VISUAL_STEP_ORIGIN_INTERP_SPEED = 6
-local VISUAL_IK_FLOOR_BLEND = 0.35
+local VISUAL_STEP_ORIGIN_INTERP_SPEED = 10.5
+local VISUAL_IK_FLOOR_BLEND = 0.8
+local VISUAL_STEP_ORIGIN_MAX_DOWN = 18
 
 local TURN_GESTURE_COOLDOWN = 0.5
 local TURN_GESTURE_MIN_DELTA = 15
@@ -298,15 +300,25 @@ function ENT:PrintDebugLine()
 	NPCDebug.PrintServerLine(self)
 end
 
-function ENT:_MoveXY(moveX, moveY, playbackRate)
-	moveX = math.Clamp(tonumber(moveX) or 0, -1, 1)
-	moveY = math.Clamp(tonumber(moveY) or 0, -1, 1)
+local function normalizeMoveYaw(yaw)
+	yaw = (yaw + 180) % 360 - 180
+	return yaw
+end
+
+local function getSequenceMoveYaw(ent)
+	if not ent.GetSequenceMoveYaw then return 0 end
+
+	local yaw = ent:GetSequenceMoveYaw(ent:GetSequence())
+	if not isnumber(yaw) or math.abs(yaw) > 360 then return 0 end
+	return normalizeMoveYaw(yaw)
+end
+
+function ENT:_MoveYaw(moveYaw, playbackRate)
+	moveYaw = normalizeMoveYaw(tonumber(moveYaw) or 0)
 	playbackRate = math.max(tonumber(playbackRate) or 1, 0)
 
 	if self.SetPoseParameter then
-		self:SetPoseParameter("move_x", moveX)
-		self:SetPoseParameter("move_y", moveY)
-		self:SetPoseParameter("move_yaw", math.deg(math.atan2(moveY, moveX)))
+		self:SetPoseParameter("move_yaw", moveYaw)
 		if self.InvalidateBoneCache then self:InvalidateBoneCache() end
 	end
 
@@ -316,34 +328,30 @@ function ENT:_MoveXY(moveX, moveY, playbackRate)
 	if self.DebugEnabled and CurTime() >= (self.NextPoseDebugPrint or 0) then
 		self.NextPoseDebugPrint = CurTime() + 0.25
 		print(string.format(
-			"[V3POSESV #%d] seq=%d:%s inX=%.3f inY=%.3f pb=%.2f getX=%s getY=%s getYaw=%s rangeX=%s rangeY=%s rangeYaw=%s",
-			self:EntIndex(), self:GetSequence(), tostring(self:GetSequenceName(self:GetSequence())), moveX, moveY, playbackRate,
-			tostring(self:GetPoseParameter("move_x")), tostring(self:GetPoseParameter("move_y")), tostring(self:GetPoseParameter("move_yaw")),
-			getPoseRangeDebug(self, "move_x"), getPoseRangeDebug(self, "move_y"), getPoseRangeDebug(self, "move_yaw")
+			"[V3POSESV #%d] seq=%d:%s inYaw=%.3f pb=%.2f getYaw=%s rangeYaw=%s seqMoveYaw=%s",
+			self:EntIndex(), self:GetSequence(), tostring(self:GetSequenceName(self:GetSequence())), moveYaw, playbackRate,
+			tostring(self:GetPoseParameter("move_yaw")),
+			getPoseRangeDebug(self, "move_yaw"), tostring(getSequenceMoveYaw(self))
 		))
 	end
 end
 
-function ENT:RunMoveXYClone(wantMove, speed, moveVel)
+function ENT:RunMoveYawClone(wantMove, speed, moveVel)
 	if not wantMove then
-		self:_MoveXY(0, 0, 1)
+		self:_MoveYaw(0, 1)
 		return
 	end
 
 	local vel = isvector(moveVel) and moveVel or self.loco:GetVelocity()
 	local moveSpeed = math.max(speed or 0, 0)
-	local denom = math.max(FOLLOW_SPEED_WALK, 1)
-	local moveX = self:GetForward():Dot(vel) / denom
-	local moveY = self:GetRight():Dot(vel) / denom
+	local moveYaw = 0
+	if moveSpeed > 1 and vel:LengthSqr() > 0.001 then
+		moveYaw = normalizeMoveYaw((vel:Angle().y - self:GetAngles().y) - getSequenceMoveYaw(self))
+	end
 	local groundSpeed = self.GetSequenceGroundSpeed and self:GetSequenceGroundSpeed(self:GetSequence()) or FOLLOW_SPEED_WALK
 	local playbackRate = FOLLOW_SPEED_WALK / math.max(groundSpeed, 1)
 
-	if moveSpeed <= 1 then
-		moveX = 1
-		moveY = 0
-	end
-
-	self:_MoveXY(moveX, moveY, playbackRate)
+	self:_MoveYaw(moveYaw, playbackRate)
 end
 
 function ENT:BodyUpdate()
@@ -383,7 +391,7 @@ function ENT:BodyUpdate()
 	local moveAnimSpeed = actualSpeed > 0.1 and actualSpeed or speed
 	local moveAnimVel = actualSpeed > 0.1 and actualVel or vel
 	self._WalkIdleOverlayMoveSpeed = moveAnimSpeed
-	self:RunMoveXYClone(wantMove, moveAnimSpeed, moveAnimVel)
+	self:RunMoveYawClone(wantMove, moveAnimSpeed, moveAnimVel)
 	refreshVisualPoseValues(self)
 	self:PrintDebugLine()
 end
@@ -436,7 +444,7 @@ function ENT:UpdateWalkIdleOverlay(wantMove, moveSpeed, interval)
 		if self.SetLayerBlendOut then self:SetLayerBlendOut(layerId, 0) end
 	end
 
-	local targetWeight = math.Clamp(1 - ((moveSpeed or 0) / FOLLOW_SPEED_WALK), 0, WALK_IDLE_OVERLAY_MAX_WEIGHT)
+	local targetWeight = math.Clamp(1 - ((moveSpeed or 0) / FOLLOW_SPEED_WALK), WALK_IDLE_OVERLAY_MIN_WEIGHT, WALK_IDLE_OVERLAY_MAX_WEIGHT)
 	self._WalkIdleOverlayRawWeight = targetWeight
 	self._WalkIdleOverlayTargetWeight = targetWeight
 	local dt = interval or (FrameTime and FrameTime() or 0.015)
@@ -1033,10 +1041,10 @@ function ENT:Draw()
 	if minGroundZ and maxGroundZ then
 		minGroundZ = math.Clamp(minGroundZ, traceZ - STEP_HEIGHT, traceZ + STEP_HEIGHT)
 		maxGroundZ = math.Clamp(maxGroundZ, traceZ - STEP_HEIGHT, traceZ + STEP_HEIGHT)
-		self._VisualEstIkFloor = (self._VisualEstIkFloor or hullZ) * (1 - IK_FLOOR_BLEND) + minGroundZ * IK_FLOOR_BLEND
+		self._VisualEstIkFloor = (self._VisualEstIkFloor or minGroundZ) * (1 - IK_FLOOR_BLEND) + minGroundZ * IK_FLOOR_BLEND
 
 		local bias = math.Clamp((maxGroundZ - minGroundZ) - STEP_HEIGHT, 0, STEP_HEIGHT)
-		local targetOffset = math.Clamp(self._VisualEstIkFloor - hullZ, -STEP_HEIGHT + bias, 0)
+		local targetOffset = math.Clamp(self._VisualEstIkFloor - hullZ, -VISUAL_STEP_ORIGIN_MAX_DOWN + bias, 0)
 		local targetRenderZ = hullZ + targetOffset
 		local renderZ = self._VisualRenderZ or targetRenderZ
 		local blend = math.Clamp(FrameTime() * STEP_ORIGIN_INTERP_SPEED, 0, 1)

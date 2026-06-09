@@ -7,7 +7,7 @@ Mod.PrintSpawnHullEnabled = Mod.PrintSpawnHullEnabled or false
 
 local SERVER_DEBUG_INTERVAL = 0.05
 local SERVER_DEBUG_STILL_SPEED = 1
-local SERVER_DEBUG_STILL_MAX_SAMPLES = 6
+local SERVER_DEBUG_STILL_MAX_SAMPLES = 1
 
 local V5_INTERNAL_PROBE_NAMES = {
 	"m_flEstIkOffset",
@@ -355,8 +355,8 @@ end
 if CLIENT then
 
 local DEFAULT_VISUAL_DEBUG_INTERVAL = 0.05
-local VISUAL_DEBUG_STILL_MAX_SAMPLES = 6
-local VISUAL_DEBUG_NO_FOLLOW_MAX_SAMPLES = 6
+local VISUAL_DEBUG_STILL_MAX_SAMPLES = 1
+local VISUAL_DEBUG_NO_FOLLOW_MAX_SAMPLES = 1
 
 local function getBoneWorldPos(ent, boneName)
 	local bone = ent:LookupBone(boneName)
@@ -426,7 +426,7 @@ function Mod.PrintVisualZ(ent, tag, data, interval)
 	local lKnee, lThighPitch, lShinPitch = Mod.GetLegAngles(ent, "L")
 	local rKnee, rThighPitch, rShinPitch = Mod.GetLegAngles(ent, "R")
 	local stateKey = string.format(
-		"%s:%d:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s",
+		"%s:%d:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s",
 		label,
 		seq,
 		tostring(data.activeFoot or "?"),
@@ -445,15 +445,27 @@ function Mod.PrintVisualZ(ent, tag, data, interval)
 		fmt(data.ikRuleEnd),
 		tostring(data.ikRuleBlend or "?"),
 		fmt(data.ikRuleWeight),
+		fmt(data.ikRelease),
+		fmt(data.ikLatched),
+		fmt(data.leftIkWeight),
+		fmt(data.leftIkRelease),
+		fmt(data.leftIkLatched),
+		fmt(data.leftIkSolved),
+		fmt(data.rightIkWeight),
+		fmt(data.rightIkRelease),
+		fmt(data.rightIkLatched),
+		fmt(data.rightIkSolved),
 		tostring(data.poseDebug or "?")
 	)
 	if Mod.SuppressStill(ent, "_CityVisualDebug" .. label, false, stateKey, VISUAL_DEBUG_STILL_MAX_SAMPLES) then return end
 
 	print(string.format(
-		"[%s #%d] seq=%d:%s cycle=%.3f hullZ=%s renderZ=%s rDelta=%s active=%s groundZ=%s estZ=%s minZ=%s maxZ=%s ikStart=%s ikPeak=%s ikTail=%s ikEnd=%s ikBlend=%s ikWeight=%s poseNorm=%s Lloc=%s Lw=%s Lhit=%s Rloc=%s Rw=%s Rhit=%s footXY=%s foot3D=%s footDz=%s Lknee=%s Rknee=%s Lthigh=%s Rthigh=%s Lshin=%s Rshin=%s",
+		"[%s #%d] seq=%d:%s cycle=%.3f hullZ=%s renderZ=%s rDelta=%s active=%s groundZ=%s estZ=%s minZ=%s maxZ=%s ikStart=%s ikPeak=%s ikTail=%s ikEnd=%s ikBlend=%s ikWeight=%s ikRel=%s ikLatch=%s LikW=%s LikRel=%s LikLatch=%s LikSolved=%s RikW=%s RikRel=%s RikLatch=%s RikSolved=%s poseNorm=%s Lloc=%s Lw=%s Lhit=%s Rloc=%s Rw=%s Rhit=%s footXY=%s foot3D=%s footDz=%s Lknee=%s Rknee=%s Lthigh=%s Rthigh=%s Lshin=%s Rshin=%s",
 		label, ent:EntIndex(), seq, seqName, cycle, fmt(hullZ), fmt(data.renderZ), fmt(data.renderZ and (data.renderZ - hullZ)), tostring(data.activeFoot or "?"),
 		fmt(data.groundZ), fmt(data.estZ), fmt(data.minGroundZ), fmt(data.maxGroundZ),
-		fmt(data.ikRuleStart), fmt(data.ikRulePeak), fmt(data.ikRuleTail), fmt(data.ikRuleEnd), tostring(data.ikRuleBlend or "?"), fmt(data.ikRuleWeight), tostring(data.poseDebug or "?"),
+		fmt(data.ikRuleStart), fmt(data.ikRulePeak), fmt(data.ikRuleTail), fmt(data.ikRuleEnd), tostring(data.ikRuleBlend or "?"), fmt(data.ikRuleWeight), fmt(data.ikRelease), fmt(data.ikLatched),
+		fmt(data.leftIkWeight), fmt(data.leftIkRelease), fmt(data.leftIkLatched), fmt(data.leftIkSolved),
+		fmt(data.rightIkWeight), fmt(data.rightIkRelease), fmt(data.rightIkLatched), fmt(data.rightIkSolved), tostring(data.poseDebug or "?"),
 		fmt(data.leftLocalZ), fmt(data.leftWorldZ), fmt(data.leftHit), fmt(data.rightLocalZ), fmt(data.rightWorldZ), fmt(data.rightHit),
 		fmt(data.footDistXY), fmt(data.footDist3D), fmt(data.footDeltaZ),
 		fmt(lKnee), fmt(rKnee), fmt(lThighPitch), fmt(rThighPitch), fmt(lShinPitch), fmt(rShinPitch)

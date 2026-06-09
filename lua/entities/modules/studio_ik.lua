@@ -115,6 +115,13 @@ local function parseGroundRule(f, base)
 		height = readFloatAt(f, base + 20),
 		radius = readFloatAt(f, base + 24),
 		floor = readFloatAt(f, base + 28),
+		pos = Vector(readFloatAt(f, base + 32), readFloatAt(f, base + 36), readFloatAt(f, base + 40)),
+		q = {
+			x = readFloatAt(f, base + 44),
+			y = readFloatAt(f, base + 48),
+			z = readFloatAt(f, base + 52),
+			w = readFloatAt(f, base + 56)
+		},
 		start = readFloatAt(f, base + 76),
 		peak = readFloatAt(f, base + 80),
 		tail = readFloatAt(f, base + 84),

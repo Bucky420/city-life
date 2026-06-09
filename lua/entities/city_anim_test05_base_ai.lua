@@ -245,8 +245,51 @@ end
 
 if CLIENT then
 
-local FOOT_TRACE_RADIUS = 2.5
+local FOOT_TRACE_RADIUS = 1.5
 local FOOT_TRACE_HEIGHT = 20
+local FOOT_TRACE_CENTER_FORWARD_OFFSET = 3
+
+local function drawTraceSquare(x, y, z, r, color)
+	render.DrawLine(Vector(x - r, y - r, z), Vector(x + r, y - r, z), color, false)
+	render.DrawLine(Vector(x + r, y - r, z), Vector(x + r, y + r, z), color, false)
+	render.DrawLine(Vector(x + r, y + r, z), Vector(x - r, y + r, z), color, false)
+	render.DrawLine(Vector(x - r, y + r, z), Vector(x - r, y - r, z), color, false)
+end
+
+local function drawTraceHullLines(data, color)
+	if not data or not data.worldPos then return end
+
+	local pos = data.worldPos
+	local r = FOOT_TRACE_RADIUS
+	local startZ = pos.z + FOOT_TRACE_HEIGHT
+	local endZ = pos.z - FOOT_TRACE_HEIGHT
+
+	render.DrawLine(Vector(pos.x, pos.y, startZ), Vector(pos.x, pos.y, endZ), Color(180, 180, 180, 160), false)
+	drawTraceSquare(pos.x, pos.y, pos.z, r, Color(180, 180, 255, 220))
+	if data.rawWorldPos then
+		local raw = data.rawWorldPos
+		local rawZ = raw.z + 0.4
+		render.DrawLine(Vector(raw.x, raw.y, rawZ), Vector(pos.x, pos.y, rawZ), Color(255, 255, 255, 220), false)
+		drawTraceSquare(raw.x, raw.y, rawZ, 0.8, Color(255, 255, 255, 220))
+	end
+
+	if data.hitZ then
+		local z = data.hitZ + 0.2
+		drawTraceSquare(pos.x, pos.y, z, r, color)
+		render.DrawLine(Vector(pos.x - r * 1.5, pos.y, z), Vector(pos.x + r * 1.5, pos.y, z), Color(255, 255, 80, 255), false)
+		render.DrawLine(Vector(pos.x, pos.y - r * 1.5, z), Vector(pos.x, pos.y + r * 1.5, z), Color(255, 255, 80, 255), false)
+	end
+end
+
+local function offsetFootTraceCenter(matrix, pos)
+	if not matrix or not isvector(pos) or FOOT_TRACE_CENTER_FORWARD_OFFSET == 0 then return pos end
+
+	local forward = matrix.GetForward and matrix:GetForward() or nil
+	if not isvector(forward) or forward:IsZero() then return pos end
+
+	forward:Normalize()
+	return pos + forward * FOOT_TRACE_CENTER_FORWARD_OFFSET
+end
 
 local function getFootData(ent, side)
 	local bone = ent:LookupBone("ValveBiped.Bip01_" .. side .. "_Foot")
@@ -255,7 +298,8 @@ local function getFootData(ent, side)
 	local mat = ent:GetBoneMatrix(bone)
 	if not mat then return nil end
 
-	local footPos = mat:GetTranslation()
+	local rawFootPos = mat:GetTranslation()
+	local footPos = offsetFootTraceCenter(mat, rawFootPos)
 	local tr = util.TraceHull({
 		start = footPos + Vector(0, 0, FOOT_TRACE_HEIGHT),
 		endpos = footPos - Vector(0, 0, FOOT_TRACE_HEIGHT),
@@ -266,6 +310,7 @@ local function getFootData(ent, side)
 	})
 
 	return {
+		rawWorldPos = rawFootPos,
 		worldPos = footPos,
 		localZ = ent:WorldToLocal(footPos).z,
 		worldZ = footPos.z,
@@ -296,6 +341,8 @@ function ENT:Draw()
 	if self:GetNWBool("CityNPCDebugEnabled", false) then
 		local leftFoot = getFootData(self, "L")
 		local rightFoot = getFootData(self, "R")
+		drawTraceHullLines(leftFoot, Color(80, 170, 255, 255))
+		drawTraceHullLines(rightFoot, Color(255, 120, 80, 255))
 		local renderOrigin = self.GetRenderOrigin and self:GetRenderOrigin() or nil
 		local renderZ = isvector(renderOrigin) and renderOrigin.z or nil
 		local networkOrigin = self.GetNetworkOrigin and self:GetNetworkOrigin() or nil

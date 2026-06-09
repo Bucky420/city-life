@@ -38,6 +38,7 @@ local WALK_IDLE_OVERLAY_CYCLE = 0.20
 local WALK_IDLE_OVERLAY_MIN_WEIGHT = 0.25
 local WALK_IDLE_OVERLAY_MAX_WEIGHT = 0.97
 local WALK_IDLE_OVERLAY_FADE_RATE = 4.0
+local FOOT_TRACE_CENTER_FORWARD_OFFSET = 3
 local WALK_TO_IDLE_DELAY = 0.15
 local VISUAL_STEP_ORIGIN_INTERP_SPEED = 10.5
 local VISUAL_IK_FLOOR_BLEND = 0.8
@@ -48,6 +49,63 @@ local TURN_GESTURE_MIN_DELTA = 15
 
 local MALE_SHARED_ANIM_MODEL = "models/humans/male_shared.mdl"
 local MALE_EVENT_ANIM_MODEL = "models/humans/group03/male_01.mdl"
+
+local function angleFromStudioQuaternion(q)
+	if not q then return nil end
+	local x = q.x or 0
+	local y = q.y or 0
+	local z = q.z or 0
+	local w = q.w or 1
+	local len = math.sqrt(x * x + y * y + z * z + w * w)
+	if len <= 0 then return angle_zero end
+	x, y, z, w = x / len, y / len, z / len, w / len
+
+	local sinrCosp = 2 * (w * x + y * z)
+	local cosrCosp = 1 - 2 * (x * x + y * y)
+	local roll = math.deg(math.atan2(sinrCosp, cosrCosp))
+
+	local sinp = 2 * (w * y - z * x)
+	local pitch
+	if math.abs(sinp) >= 1 then
+		pitch = math.deg((sinp >= 0) and (math.pi * 0.5) or (-math.pi * 0.5))
+	else
+		pitch = math.deg(math.asin(sinp))
+	end
+
+	local sinyCosp = 2 * (w * z + x * y)
+	local cosyCosp = 1 - 2 * (y * y + z * z)
+	local yaw = math.deg(math.atan2(sinyCosp, cosyCosp))
+
+	return Angle(pitch, yaw, roll)
+end
+
+local function getIkRuleTargetPosition(boneMatrix, rule)
+	if not boneMatrix or not rule or not isvector(rule.pos) then
+		return boneMatrix and boneMatrix:GetTranslation() or nil
+	end
+
+	local localOffset = Matrix()
+	localOffset:SetTranslation(rule.pos)
+	local offsetAngle = angleFromStudioQuaternion(rule.q)
+	if offsetAngle then
+		localOffset:SetAngles(offsetAngle)
+	end
+
+	local inverseOffset = localOffset:GetInverseTR()
+	local targetMatrix = Matrix(boneMatrix)
+	targetMatrix:Mul(inverseOffset)
+	return targetMatrix:GetTranslation()
+end
+
+local function offsetFootTraceCenter(matrix, pos)
+	if not matrix or not isvector(pos) or FOOT_TRACE_CENTER_FORWARD_OFFSET == 0 then return pos end
+
+	local forward = matrix.GetForward and matrix:GetForward() or nil
+	if not isvector(forward) or forward:IsZero() then return pos end
+
+	forward:Normalize()
+	return pos + forward * FOOT_TRACE_CENTER_FORWARD_OFFSET
+end
 
 local function cycleDistance(a, b)
 	a = a and (a % 1) or 0
@@ -894,12 +952,234 @@ concommand.Add("citynpc_v3_walk_timing_client", function(_, _, args)
 	printWalkTimingDebug("V3TIMING CLIENT", model, seqName or "walk_all")
 end)
 
+local function drawTraceSquare(x, y, z, r, color)
+	render.DrawLine(Vector(x - r, y - r, z), Vector(x + r, y - r, z), color, false)
+	render.DrawLine(Vector(x + r, y - r, z), Vector(x + r, y + r, z), color, false)
+	render.DrawLine(Vector(x + r, y + r, z), Vector(x - r, y + r, z), color, false)
+	render.DrawLine(Vector(x - r, y + r, z), Vector(x - r, y - r, z), color, false)
+end
+
+local function drawBoxLines(pos, mins, maxs, color)
+	local x1, y1, z1 = pos.x + mins.x, pos.y + mins.y, pos.z + mins.z
+	local x2, y2, z2 = pos.x + maxs.x, pos.y + maxs.y, pos.z + maxs.z
+	local bottom = {
+		Vector(x1, y1, z1), Vector(x2, y1, z1), Vector(x2, y2, z1), Vector(x1, y2, z1)
+	}
+	local top = {
+		Vector(x1, y1, z2), Vector(x2, y1, z2), Vector(x2, y2, z2), Vector(x1, y2, z2)
+	}
+	for i = 1, 4 do
+		local nextIndex = (i % 4) + 1
+		render.DrawLine(bottom[i], bottom[nextIndex], color, false)
+		render.DrawLine(top[i], top[nextIndex], color, false)
+		render.DrawLine(bottom[i], top[i], color, false)
+	end
+end
+
+local function drawRuleStateMarker(info, rule, activeFoot, side, hullZ)
+	if not info or not info.traceX or not info.traceY then return end
+
+	local ent = info.ent
+	local cycle = 0
+	if IsValid(ent) and ent.GetCycle then
+		cycle = ent:GetCycle()
+	end
+
+	local active = activeFoot == side
+	local inRule = FootIK.IsCycleInRelease(rule, cycle)
+	local push = getRulePushFraction(rule, cycle)
+	local hitZ = info.traceZ
+	local falling = not hitZ or (hullZ and hitZ and hullZ - hitZ > 18.5)
+	local baseZ = (hitZ or info.floor or hullZ or 0) + 2
+	local color = Color(120, 120, 120, 220)
+	if falling then
+		color = Color(255, 60, 60, 255)
+	elseif push > 0.05 then
+		color = Color(255, 220, 60, 255)
+	elseif inRule or active then
+		color = Color(80, 255, 100, 255)
+	end
+
+	local height = 6 + push * 12
+	local p1 = Vector(info.traceX, info.traceY, baseZ)
+	local p2 = Vector(info.traceX, info.traceY, baseZ + height)
+	render.DrawLine(p1, p2, color, false)
+	drawTraceSquare(info.traceX, info.traceY, baseZ + height, 2, color)
+end
+
+local function drawFootContactIndicator(footPos, hitZ, radius)
+	if not isvector(footPos) then return end
+
+	local r = math.max(radius or 1.5, 1.5)
+	local contactZ = isnumber(hitZ) and hitZ or (footPos.z - 8)
+	local gap = footPos.z - contactZ
+	local color = (not isnumber(hitZ) or gap > 1.5) and Color(255, 40, 40, 255) or Color(60, 255, 80, 255)
+	local groundPos = Vector(footPos.x, footPos.y, contactZ + 0.4)
+
+	render.DrawLine(groundPos, footPos, color, false)
+	drawTraceSquare(footPos.x, footPos.y, groundPos.z, r * 1.25, color)
+	drawTraceSquare(footPos.x, footPos.y, footPos.z, r, color)
+end
+
+local function drawTraceHullLines(info, color)
+	if not info or not info.traceX or not info.traceY or not info.floor or not info.height or not info.radius then return end
+
+	local x = info.traceX
+	local y = info.traceY
+	local r = info.radius
+	local startZ = info.floor + info.height
+	local endZ = info.floor - info.height
+
+	-- The trace sweeps far above/below the foot; draw that as a center guide only.
+	render.DrawLine(Vector(x, y, startZ), Vector(x, y, endZ), Color(180, 180, 180, 160), false)
+	drawTraceSquare(x, y, info.floor, r, Color(180, 180, 255, 220))
+	if info.rawTraceX and info.rawTraceY and info.rawTraceZ then
+		local rawZ = info.rawTraceZ + 0.4
+		render.DrawLine(Vector(info.rawTraceX, info.rawTraceY, rawZ), Vector(x, y, rawZ), Color(255, 255, 255, 220), false)
+		drawTraceSquare(info.rawTraceX, info.rawTraceY, rawZ, 0.8, Color(255, 255, 255, 220))
+	end
+
+	if info.traceZ then
+		local z = info.traceZ + 0.2
+		drawTraceSquare(x, y, z, r, color)
+		render.DrawLine(Vector(x - r * 1.5, y, z), Vector(x + r * 1.5, y, z), Color(255, 255, 80, 255), false)
+		render.DrawLine(Vector(x, y - r * 1.5, z), Vector(x, y + r * 1.5, z), Color(255, 255, 80, 255), false)
+	end
+end
+
+local function drawFootTraceHulls(leftTrace, rightTrace, leftRule, rightRule, activeFoot, hullZ, ent, leftFootPos, rightFootPos)
+	if leftTrace then leftTrace.ent = ent end
+	if rightTrace then rightTrace.ent = ent end
+	drawTraceHullLines(leftTrace, Color(80, 170, 255, 255))
+	drawTraceHullLines(rightTrace, Color(255, 120, 80, 255))
+	drawRuleStateMarker(leftTrace, leftRule, activeFoot, "left", hullZ)
+	drawRuleStateMarker(rightTrace, rightRule, activeFoot, "right", hullZ)
+	drawFootContactIndicator(leftFootPos, leftTrace and leftTrace.traceZ, leftTrace and leftTrace.radius)
+	drawFootContactIndicator(rightFootPos, rightTrace and rightTrace.traceZ, rightTrace and rightTrace.radius)
+end
+
+local function getClientMoveDirection(ent)
+	local pos = ent:GetPos()
+	local lastPos = ent._CityForwardProbeLastPos
+	ent._CityForwardProbeLastPos = pos
+
+	if isvector(lastPos) then
+		local delta = Vector(pos.x - lastPos.x, pos.y - lastPos.y, 0)
+		local dist = delta:Length()
+		if dist > 0.05 then
+			ent._CityForwardProbeDir = delta / dist
+		end
+	end
+
+	if isvector(ent._CityForwardProbeDir) then
+		return ent._CityForwardProbeDir
+	end
+
+	local forward = ent:GetForward()
+	forward.z = 0
+	local len = forward:Length()
+	if len <= 0.001 then return nil end
+	return forward / len
+end
+
+local function getClientSdkTraceHullBounds(ent)
+	local mins, maxs = ent:GetCollisionBounds()
+	if not isvector(mins) or not isvector(maxs) then
+		mins, maxs = ent:OBBMins(), ent:OBBMaxs()
+	end
+	mins = Vector(mins.x, mins.y, 0)
+	return mins, maxs
+end
+
+local function traceClientSdkMoveHull(ent, startPos, endPos, mins, maxs)
+	return util.TraceHull({
+		start = startPos,
+		endpos = endPos,
+		mins = mins,
+		maxs = maxs,
+		filter = ent,
+		mask = MASK_NPCSOLID or MASK_SOLID,
+		collisiongroup = COLLISION_GROUP_NPC
+	})
+end
+
+local function drawForwardStepProbe(ent)
+	local pos = ent:GetPos()
+	local moveDir = getClientMoveDirection(ent)
+	if not isvector(moveDir) then return end
+
+	local remaining = SDK_PREDICTIVE_LOOKAHEAD
+	local probePos = pos
+	local mins, maxs = getClientSdkTraceHullBounds(ent)
+	local stepHeight = (ent.loco and ent.loco.GetStepHeight) and ent.loco:GetStepHeight() or 18
+
+	while remaining > 0.001 do
+		local stepSize = math.min(SDK_LOCAL_STEP_SIZE, remaining)
+		local start = Vector(probePos.x, probePos.y, probePos.z + SDK_MOVE_HEIGHT_EPSILON)
+		local forwardEnd = start + moveDir * stepSize
+		local forwardTrace = traceClientSdkMoveHull(ent, start, forwardEnd, mins, maxs)
+
+		drawBoxLines(start, mins, maxs, Color(80, 220, 255, 180))
+		render.DrawLine(start, forwardEnd, Color(80, 220, 255, 255), false)
+
+		local moveStart = start
+		local moveTrace = forwardTrace
+		local blocked = false
+		if forwardTrace.StartSolid or forwardTrace.Fraction < 1 then
+			moveStart = forwardTrace.StartSolid and start or forwardTrace.HitPos
+			local upEnd = moveStart + Vector(0, 0, stepHeight)
+			local upTrace = traceClientSdkMoveHull(ent, moveStart, upEnd, mins, maxs)
+			render.DrawLine(moveStart, upEnd, Color(200, 120, 255, 255), false)
+			drawBoxLines(upTrace.HitPos, mins, maxs, Color(200, 120, 255, 180))
+
+			moveStart = upTrace.HitPos
+			moveTrace = traceClientSdkMoveHull(ent, moveStart, Vector(forwardEnd.x, forwardEnd.y, moveStart.z), mins, maxs)
+			render.DrawLine(moveStart, Vector(forwardEnd.x, forwardEnd.y, moveStart.z), Color(80, 220, 255, 255), false)
+			if moveTrace.StartSolid or moveTrace.Fraction <= 0.01 then
+				blocked = true
+			end
+		end
+
+		if blocked then
+			drawBoxLines(moveTrace.HitPos or moveStart, mins, maxs, Color(255, 60, 60, 220))
+			break
+		end
+
+		local downStart = moveTrace.HitPos
+		local downEnd = Vector(downStart.x, downStart.y, probePos.z - stepHeight - SDK_MOVE_HEIGHT_EPSILON)
+		local downTrace = traceClientSdkMoveHull(ent, downStart, downEnd, mins, maxs)
+		render.DrawLine(downStart, downEnd, Color(255, 220, 80, 255), false)
+		if downTrace.Fraction == 1 then
+			drawBoxLines(downEnd, mins, maxs, Color(255, 60, 60, 220))
+			break
+		end
+
+		local nextPos = downTrace.HitPos
+		nextPos.z = nextPos.z + SDK_MOVE_HEIGHT_EPSILON
+		drawBoxLines(nextPos, mins, maxs, Color(80, 255, 100, 200))
+		probePos = nextPos
+		remaining = remaining - stepSize
+	end
+end
+
 function ENT:Draw()
-	self:SetIK(true)
+	self:SetIK(false)
 	self:SetupBones()
 
 	local lFootBone = self:LookupBone("ValveBiped.Bip01_L_Foot")
 	local rFootBone = self:LookupBone("ValveBiped.Bip01_R_Foot")
+	local traceBoneMatrices = {}
+	for _, bone in ipairs({ lFootBone, rFootBone }) do
+		if bone then
+			local mat = self:GetBoneMatrix(bone)
+			if mat then
+				traceBoneMatrices[bone] = Matrix(mat)
+			end
+		end
+	end
+
+	self:SetIK(true)
+	self:SetupBones()
 
 	local STEP_HEIGHT = 18
 	local HULL_R = 2.5
@@ -933,10 +1213,14 @@ function ENT:Draw()
 	end
 	local leftLocalZ, leftWorldZ = footInfo(lFootBone)
 	local rightLocalZ, rightWorldZ = footInfo(rFootBone)
+	local leftFootMat = lFootBone and self:GetBoneMatrix(lFootBone) or nil
+	local rightFootMat = rFootBone and self:GetBoneMatrix(rFootBone) or nil
+	local leftFootPos = leftFootMat and leftFootMat:GetTranslation() or nil
+	local rightFootPos = rightFootMat and rightFootMat:GetTranslation() or nil
 	local footDistXY, footDist3D, footDeltaZ
 	if leftWorldZ and rightWorldZ then
-		local leftMat = self:GetBoneMatrix(lFootBone)
-		local rightMat = self:GetBoneMatrix(rFootBone)
+		local leftMat = leftFootMat
+		local rightMat = rightFootMat
 		if leftMat and rightMat then
 			local leftWorld = leftMat:GetTranslation()
 			local rightWorld = rightMat:GetTranslation()
@@ -950,9 +1234,10 @@ function ENT:Draw()
 	-- parsed from the studio model.
 	local function doTrace(bone, rule)
 		if not bone then return nil end
-		local mat = self:GetBoneMatrix(bone)
+		local mat = traceBoneMatrices[bone] or self:GetBoneMatrix(bone)
 		if not mat then return nil end
 		local footPos = mat:GetTranslation()
+		local tracePos = footPos
 		local radius = HULL_R
 		local height = STEP_HEIGHT + 2
 		local floorZ = traceZ
@@ -960,21 +1245,40 @@ function ENT:Draw()
 			radius = math.max(rule.radius or radius, 1)
 			height = math.max(rule.height or height, 1)
 			floorZ = hullZ + (rule.floor or 0)
+			tracePos = getIkRuleTargetPosition(mat, rule) or footPos
 		end
+		local rawTracePos = tracePos
+		tracePos = offsetFootTraceCenter(mat, tracePos)
+		radius = math.max(radius - 1, 1)
 		local tr = util.TraceHull({
-			start = Vector(footPos.x, footPos.y, floorZ + height),
-			endpos = Vector(footPos.x, footPos.y, floorZ - height),
+			start = Vector(tracePos.x, tracePos.y, floorZ + height),
+			endpos = Vector(tracePos.x, tracePos.y, floorZ - height),
 			mins = Vector(-radius, -radius, 0),
 			maxs = Vector(radius, radius, radius * 2),
 			filter = self,
 			mask = MASK_SOLID
 		})
-		if not tr.Hit or tr.HitPos.z > traceZ + STEP_HEIGHT then return nil end
-		return tr.HitPos.z
-	end
+		local info = {
+			hit = tr.Hit and tr.HitPos.z <= traceZ + STEP_HEIGHT and tr.HitPos.z or nil,
+			fraction = tr.Fraction,
+			normalZ = tr.HitNormal and tr.HitNormal.z,
+			startSolid = tr.StartSolid,
+			hitWorld = tr.HitWorld,
+			traceX = tracePos.x,
+			traceY = tracePos.y,
+			traceZ = tr.HitPos and tr.HitPos.z,
+			rawTraceX = rawTracePos.x,
+			rawTraceY = rawTracePos.y,
+			rawTraceZ = rawTracePos.z,
+			radius = radius,
+			height = height,
+			floor = floorZ
+		}
+		return info.hit, info
+		end
 
-	local leftHit = doTrace(lFootBone, leftRule)
-	local rightHit = doTrace(rFootBone, rightRule)
+	local leftHit, leftTrace = doTrace(lFootBone, leftRule)
+	local rightHit, rightTrace = doTrace(rFootBone, rightRule)
 	local currentMinHit
 	local currentMaxHit
 	if leftHit then
@@ -990,13 +1294,25 @@ function ENT:Draw()
 			activeFoot = activeFoot,
 			leftLocalZ = leftLocalZ,
 			leftWorldZ = leftWorldZ,
+			leftFraction = leftTrace and leftTrace.fraction,
+			leftNormalZ = leftTrace and leftTrace.normalZ,
+			leftStartSolid = leftTrace and leftTrace.startSolid,
+			leftHitWorld = leftTrace and leftTrace.hitWorld,
 			footDistXY = footDistXY,
 			footDist3D = footDist3D,
 			footDeltaZ = footDeltaZ,
 			rightLocalZ = rightLocalZ,
-			rightWorldZ = rightWorldZ
+			rightWorldZ = rightWorldZ,
+			rightFraction = rightTrace and rightTrace.fraction,
+			rightNormalZ = rightTrace and rightTrace.normalZ,
+			rightStartSolid = rightTrace and rightTrace.startSolid,
+			rightHitWorld = rightTrace and rightTrace.hitWorld
 		})
 		self:DrawModel()
+		if self:GetNWBool("CityNPCDebugEnabled", false) then
+			drawFootTraceHulls(leftTrace, rightTrace, leftRule, rightRule, activeFoot, hullZ, self, leftFootPos, rightFootPos)
+			drawForwardStepProbe(self)
+		end
 		return
 	end
 
@@ -1058,12 +1374,20 @@ function ENT:Draw()
 			leftLocalZ = leftLocalZ,
 			leftWorldZ = leftWorldZ,
 			leftHit = leftHit,
+			leftFraction = leftTrace and leftTrace.fraction,
+			leftNormalZ = leftTrace and leftTrace.normalZ,
+			leftStartSolid = leftTrace and leftTrace.startSolid,
+			leftHitWorld = leftTrace and leftTrace.hitWorld,
 			footDistXY = footDistXY,
 			footDist3D = footDist3D,
 			footDeltaZ = footDeltaZ,
 			rightLocalZ = rightLocalZ,
 			rightWorldZ = rightWorldZ,
 			rightHit = rightHit,
+			rightFraction = rightTrace and rightTrace.fraction,
+			rightNormalZ = rightTrace and rightTrace.normalZ,
+			rightStartSolid = rightTrace and rightTrace.startSolid,
+			rightHitWorld = rightTrace and rightTrace.hitWorld,
 			groundZ = minGroundZ,
 			estZ = targetRenderZ,
 			minGroundZ = minGroundZ,
@@ -1081,6 +1405,10 @@ function ENT:Draw()
 		self:SetupBones()
 		self:DrawModel()
 		self:SetRenderOrigin(nil)
+		if self:GetNWBool("CityNPCDebugEnabled", false) then
+			drawFootTraceHulls(leftTrace, rightTrace, leftRule, rightRule, activeFoot, hullZ, self, leftFootPos, rightFootPos)
+			drawForwardStepProbe(self)
+		end
 	else
 		-- SDK UpdateStepOrigin decays the previous IK offset when contact is stale
 		-- instead of snapping the render origin straight back to the hull.
@@ -1095,6 +1423,10 @@ function ENT:Draw()
 			self:SetRenderOrigin(nil)
 		else
 			self:DrawModel()
+		end
+		if self:GetNWBool("CityNPCDebugEnabled", false) then
+			drawFootTraceHulls(leftTrace, rightTrace, leftRule, rightRule, activeFoot, hullZ, self, leftFootPos, rightFootPos)
+			drawForwardStepProbe(self)
 		end
 	end
 end

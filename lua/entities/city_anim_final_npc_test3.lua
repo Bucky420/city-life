@@ -38,112 +38,175 @@ local WALK_IDLE_OVERLAY_CYCLE = 0.20
 local WALK_IDLE_OVERLAY_MAX_WEIGHT = 0.97
 local WALK_IDLE_OVERLAY_FADE_RATE = 4.0
 local WALK_TO_IDLE_DELAY = 0.15
-local VISUAL_CONTACT_RELEASE_CYCLE = 0.48
-local VISUAL_STEP_ORIGIN_INTERP_SPEED = 12
-local VISUAL_SWING_PROBE_SCALE = 4
-local VISUAL_IK_FLOOR_BLEND = 0.8
+local VISUAL_STEP_ORIGIN_INTERP_SPEED = 6
+local VISUAL_IK_FLOOR_BLEND = 0.35
 
 local TURN_GESTURE_COOLDOWN = 0.5
 local TURN_GESTURE_MIN_DELTA = 15
 
--- Citizen footstep events mark which foot should be treated as the current
--- contact foot for stair/IK checks. Source defines regular footsteps as
--- 6004/6005 and material-based footsteps as 6006/6007.
-local FOOTSTEP_EVENT_LEFT = 6004
-local FOOTSTEP_EVENT_RIGHT = 6005
-local FOOTSTEP_EVENT_MAT_LEFT = 6006
-local FOOTSTEP_EVENT_MAT_RIGHT = 6007
 local MALE_SHARED_ANIM_MODEL = "models/humans/male_shared.mdl"
-local modelFootCycleCache = {}
+local MALE_EVENT_ANIM_MODEL = "models/humans/group03/male_01.mdl"
 
-local function getModelFootCycles(model)
-	if not model then return nil end
-	if modelFootCycleCache[model] then return modelFootCycleCache[model] end
+local function cycleDistance(a, b)
+	a = a and (a % 1) or 0
+	b = b and (b % 1) or 0
+	local d = math.abs(a - b)
+	return math.min(d, 1 - d)
+end
 
-	local cache = {}
-	local mi = util.GetModelInfo(model)
-	if mi and mi.Sequences then
-		for _, seq in ipairs(mi.Sequences) do
-			local leftCycle, rightCycle
-			if seq.Events then
-				for _, ev in ipairs(seq.Events) do
-					if ev.Event == FOOTSTEP_EVENT_LEFT or ev.Event == FOOTSTEP_EVENT_MAT_LEFT then leftCycle = ev.Cycle end
-					if ev.Event == FOOTSTEP_EVENT_RIGHT or ev.Event == FOOTSTEP_EVENT_MAT_RIGHT then rightCycle = ev.Cycle end
-				end
-			end
-			if leftCycle and rightCycle then
-				cache[seq.Name] = { left = leftCycle, right = rightCycle }
-			end
+local function getSequenceGroundRules(model, seqName)
+	local seq = StudioIK.GetSequence(model, seqName)
+	if not seq then return nil end
+	local rules = {}
+	local seen = {}
+	for _, rule in ipairs(seq.rules or {}) do
+		local key = tostring(rule.chain) .. ":" .. tostring(rule.slot)
+		if not seen[key] then
+			seen[key] = true
+			rules[#rules + 1] = rule
 		end
 	end
-
-	modelFootCycleCache[model] = cache
-	return cache
-end
-
-local function getEventContactFoot(ent)
-	local cache = getModelFootCycles(ent:GetModel())
-	local footCycle = cache and cache[ent:GetSequenceName(ent:GetSequence())]
-	if not footCycle then return nil end
-
-	local cycle = ent:GetCycle()
-	local function cycleSince(eventCycle)
-		local d = cycle - eventCycle
-		if d < 0 then d = d + 1 end
-		return d
-	end
-
-	return (cycleSince(footCycle.left) < cycleSince(footCycle.right)) and "left" or "right"
-end
-
-local function getFootSwingProbeScale(ent, side)
-	local cache = getModelFootCycles(ent:GetModel())
-	local footCycle = cache and cache[ent:GetSequenceName(ent:GetSequence())]
-	if not footCycle then return 0 end
-
-	local ownCycle = footCycle[side]
-	local otherCycle = (side == "left") and footCycle.right or footCycle.left
-	if not ownCycle or not otherCycle then return 0 end
-
-	local cycle = ent:GetCycle()
-	local span = ownCycle - otherCycle
-	if span <= 0 then span = span + 1 end
-	if span <= 0.001 then return 0 end
-
-	local sinceOther = cycle - otherCycle
-	if sinceOther < 0 then sinceOther = sinceOther + 1 end
-	if sinceOther > span then return 0 end
-
-	return math.sin(math.Clamp(sinceOther / span, 0, 1) * math.pi)
-end
-
-local function getFootContactAge(ent, side)
-	local cache = getModelFootCycles(ent:GetModel())
-	local footCycle = cache and cache[ent:GetSequenceName(ent:GetSequence())]
-	if not footCycle or not footCycle[side] then return nil end
-
-	local age = ent:GetCycle() - footCycle[side]
-	if age < 0 then age = age + 1 end
-	return age
+	table.sort(rules, function(a, b)
+		if a.chain ~= b.chain then return (a.chain or 0) < (b.chain or 0) end
+		return (a.contact or a.peak or 0) < (b.contact or b.peak or 0)
+	end)
+	return rules
 end
 
 local function getFootIkRule(ent, side)
-	local cache = getModelFootCycles(ent:GetModel())
 	local seqName = ent:GetSequenceName(ent:GetSequence())
-	local footCycle = cache and cache[seqName]
-	if not footCycle or not footCycle[side] then return nil end
+	local rules = getSequenceGroundRules(MALE_SHARED_ANIM_MODEL, seqName) or getSequenceGroundRules(ent:GetModel(), seqName)
+	if not rules or #rules == 0 then return nil end
+
+	local wantedChain = (side == "left") and 3 or 2
+	local baseRule
+	for _, rule in ipairs(rules) do
+		if rule.chain == wantedChain then
+			baseRule = rule
+			break
+		end
+	end
+	if not baseRule then
+		local index = (side == "right" and #rules >= 2) and 2 or 1
+		baseRule = rules[index]
+	end
+	if not baseRule then return nil end
+
 	local poseValues = ent._VisualPoseValues
-	local rule, dist = StudioIK.GetBlendedGroundRule(MALE_SHARED_ANIM_MODEL, seqName, footCycle[side], poseValues)
+	local contactCycle = baseRule.contact or baseRule.peak or baseRule.start or 0
+	local rule, dist = StudioIK.GetBlendedGroundRule(MALE_SHARED_ANIM_MODEL, seqName, contactCycle, poseValues)
 	if rule then return rule, dist end
-	return StudioIK.GetBlendedGroundRule(ent:GetModel(), seqName, footCycle[side], poseValues)
+	return StudioIK.GetBlendedGroundRule(ent:GetModel(), seqName, contactCycle, poseValues)
 end
 
-local function getTunableFloat(ent, getterName, default, minValue, maxValue)
-	local getter = ent[getterName]
-	local value = getter and getter(ent) or default
-	if not isnumber(value) then value = default end
-	if value <= 0 then value = default end
-	return math.Clamp(value, minValue, maxValue)
+local function getRuleActiveFoot(ent, leftRule, rightRule)
+	local cycle = ent:GetCycle()
+	local leftActive = FootIK.IsCycleInRelease(leftRule, cycle)
+	local rightActive = FootIK.IsCycleInRelease(rightRule, cycle)
+	if leftActive and not rightActive then return "left" end
+	if rightActive and not leftActive then return "right" end
+
+	local leftContact = leftRule and (leftRule.contact or leftRule.peak or leftRule.start)
+	local rightContact = rightRule and (rightRule.contact or rightRule.peak or rightRule.start)
+	if leftContact and rightContact then
+		return cycleDistance(cycle, leftContact) <= cycleDistance(cycle, rightContact) and "left" or "right"
+	end
+	return leftRule and "left" or (rightRule and "right" or nil)
+end
+
+local function getRulePushFraction(rule, cycle)
+	if not rule then return 0 end
+
+	local peak = rule.peak or rule.start or 0
+	local tail = rule.tail or peak
+	if tail < peak then tail = tail + 1 end
+	if cycle < peak then cycle = cycle + 1 end
+	if cycle <= peak then return 0 end
+	if cycle >= tail then return 1 end
+
+	local t = math.Clamp((cycle - peak) / math.max(tail - peak, 0.001), 0, 1)
+	-- Leg push should start subtle, then accelerate as the support leg straightens.
+	return t * t * (3 - 2 * t)
+end
+
+local function normalizedCycle(value)
+	if not isnumber(value) then return nil end
+	return value % 1
+end
+
+local function fmtCycle(value)
+	if not isnumber(value) then return "?" end
+	return string.format("%.3f", normalizedCycle(value))
+end
+
+local function fmtRaw(value)
+	return isnumber(value) and string.format("%.3f", value) or tostring(value)
+end
+
+local function footSideFromIkChain(chain)
+	if chain == 3 then return "left" end
+	if chain == 2 then return "right" end
+	return "?"
+end
+
+local function addUniqueModel(list, seen, model)
+	if not model or model == "" or seen[model] then return end
+	seen[model] = true
+	list[#list + 1] = model
+end
+
+local function printWalkTimingDebug(prefix, model, seqName)
+	model = (model and model ~= "") and model or MALE_SHARED_ANIM_MODEL
+	seqName = (seqName and seqName ~= "") and seqName or "walk_all"
+	prefix = prefix or "V3TIMING"
+
+	print(string.format("[%s] model=%s seq=%s", prefix, tostring(model), tostring(seqName)))
+
+	local models = {}
+	local seenModels = {}
+	addUniqueModel(models, seenModels, model)
+	addUniqueModel(models, seenModels, MALE_EVENT_ANIM_MODEL)
+	addUniqueModel(models, seenModels, MALE_SHARED_ANIM_MODEL)
+
+	local function printEventsForModel(checkModel, modelInfo)
+		local printed = false
+		if modelInfo and modelInfo.Sequences then
+			for _, seq in ipairs(modelInfo.Sequences) do
+				if seq.Name == seqName then
+					for _, ev in ipairs(seq.Events or {}) do
+					local side = ({ [6004] = "left", [6005] = "right", [6006] = "left", [6007] = "right" })[ev.Event] or "?"
+					local name = ({ [6004] = "step", [6005] = "step", [6006] = "mat", [6007] = "mat" })[ev.Event] or "event"
+					print(string.format("[%s] event id=%s side=%s name=%s cycle=%s raw=%s options=%s", prefix, tostring(ev.Event), side, name, fmtCycle(ev.Cycle), tostring(ev.Cycle), tostring(ev.Options or "")))
+						printed = true
+					end
+					break
+				end
+			end
+		end
+		return printed
+	end
+
+	for _, sourceModel in ipairs(models) do
+		print(string.format("[%s] source model=%s", prefix, sourceModel))
+
+		local foundEvents = printEventsForModel(sourceModel, util.GetModelInfo(sourceModel))
+		if not foundEvents then
+			print(string.format("[%s] event none model=%s", prefix, sourceModel))
+		end
+
+		local seq = StudioIK.GetSequence(sourceModel, seqName)
+		if not seq or not seq.rules or #seq.rules == 0 then
+			print(string.format("[%s] ik none model=%s", prefix, sourceModel))
+		else
+			for i, rule in ipairs(seq.rules or {}) do
+				print(string.format(
+					"[%s] ik[%d] model=%s side=%s chain=%s slot=%s contact=%s start=%s peak=%s tail=%s end=%s rawContact=%s rawStart=%s rawPeak=%s rawTail=%s rawEnd=%s floor=%s height=%s radius=%s",
+					prefix, i, sourceModel, footSideFromIkChain(rule.chain), tostring(rule.chain), tostring(rule.slot), fmtCycle(rule.contact), fmtCycle(rule.start), fmtCycle(rule.peak), fmtCycle(rule.tail), fmtCycle(rule.finish),
+					fmtRaw(rule.contact), fmtRaw(rule.start), fmtRaw(rule.peak), fmtRaw(rule.tail), fmtRaw(rule.finish), tostring(rule.floor), tostring(rule.height), tostring(rule.radius)
+				))
+			end
+		end
+	end
 end
 
 local function getNormalizedPoseParameter(ent, name)
@@ -190,29 +253,6 @@ local function refreshVisualPoseValues(ent)
 	return values
 end
 
-function ENT:SetupDataTables()
-	self:NetworkVar("Float", 0, "VisualContactReleaseCycle", {
-		KeyName = "visual_contact_release_cycle",
-		Edit = { type = "Float", min = 0.05, max = 1.0, order = 1, category = "Visual Step" }
-	})
-	self:NetworkVar("Float", 1, "VisualStepInterpSpeed", {
-		KeyName = "visual_step_interp_speed",
-		Edit = { type = "Float", min = 1, max = 30, order = 2, category = "Visual Step" }
-	})
-	self:NetworkVar("Float", 2, "VisualSwingProbeScale", {
-		KeyName = "visual_swing_probe_scale",
-		Edit = { type = "Float", min = 0.1, max = 12, order = 3, category = "Visual Step" }
-	})
-	self:NetworkVar("Float", 3, "VisualIkFloorBlend", {
-		KeyName = "visual_ik_floor_blend",
-		Edit = { type = "Float", min = 0.05, max = 1.0, order = 4, category = "Visual Step" }
-	})
-end
-
-function ENT:CanEditVariables(ply)
-	return IsValid(ply) and ply:IsAdmin()
-end
-
 if SERVER then
 
 function ENT:Initialize()
@@ -235,10 +275,6 @@ function ENT:Initialize()
 	self.loco:SetDeceleration(FOLLOW_DECEL)
 	self.loco:SetStepHeight(18)
 	self.loco:SetMaxYawRate(180)
-	self:SetVisualContactReleaseCycle(VISUAL_CONTACT_RELEASE_CYCLE)
-	self:SetVisualStepInterpSpeed(VISUAL_STEP_ORIGIN_INTERP_SPEED)
-	self:SetVisualSwingProbeScale(VISUAL_SWING_PROBE_SCALE)
-	self:SetVisualIkFloorBlend(VISUAL_IK_FLOOR_BLEND)
 
 	self:StartActivity(ACT_IDLE)
 
@@ -786,6 +822,19 @@ concommand.Add("citynpc_v3_ikdump", function(ply, _, args)
 	end
 end)
 
+concommand.Remove("citynpc_v3_walk_timing")
+concommand.Add("citynpc_v3_walk_timing", function(ply, _, args)
+	if not IsValid(ply) then return end
+
+	local model = args and args[1]
+	local seqName = args and args[2]
+	local ent = ply:GetEyeTrace().Entity
+	if (not model or model == "") and IsValid(ent) and ent:GetClass() == "city_anim_final_npc_test3" then
+		model = ent:GetModel()
+	end
+	printWalkTimingDebug("V3TIMING", model, seqName or "walk_all")
+end)
+
 end
 
 if CLIENT then
@@ -826,6 +875,17 @@ concommand.Add("citynpc_v3_ikdump_client", function(_, _, args)
 	end
 end)
 
+concommand.Remove("citynpc_v3_walk_timing_client")
+concommand.Add("citynpc_v3_walk_timing_client", function(_, _, args)
+	local model = args and args[1]
+	local seqName = args and args[2]
+	local ent = LocalPlayer and IsValid(LocalPlayer()) and LocalPlayer():GetEyeTrace().Entity or nil
+	if (not model or model == "") and IsValid(ent) and ent:GetClass() == "city_anim_final_npc_test3" then
+		model = ent:GetModel()
+	end
+	printWalkTimingDebug("V3TIMING CLIENT", model, seqName or "walk_all")
+end)
+
 function ENT:Draw()
 	self:SetIK(true)
 	self:SetupBones()
@@ -835,13 +895,13 @@ function ENT:Draw()
 
 	local STEP_HEIGHT = 18
 	local HULL_R = 2.5
-	local PLANTED_FOOT_Z = 5.5
-	local CONTACT_RELEASE_CYCLE = getTunableFloat(self, "GetVisualContactReleaseCycle", VISUAL_CONTACT_RELEASE_CYCLE, 0.05, 1.0)
-	local STEP_ORIGIN_INTERP_SPEED = getTunableFloat(self, "GetVisualStepInterpSpeed", VISUAL_STEP_ORIGIN_INTERP_SPEED, 1, 30)
-	local SWING_PROBE_SCALE = getTunableFloat(self, "GetVisualSwingProbeScale", VISUAL_SWING_PROBE_SCALE, 0.1, 12)
-	local IK_FLOOR_BLEND = getTunableFloat(self, "GetVisualIkFloorBlend", VISUAL_IK_FLOOR_BLEND, 0.05, 1.0)
+	local STEP_ORIGIN_INTERP_SPEED = VISUAL_STEP_ORIGIN_INTERP_SPEED
+	local IK_FLOOR_BLEND = VISUAL_IK_FLOOR_BLEND
 	local hullPos = self:GetPos()
 	local hullZ = hullPos.z
+	local prevHullZ = self._LastVisualHullZ or hullZ
+	local hullRising = hullZ > prevHullZ + 0.1
+	self._LastVisualHullZ = hullZ
 	if self._VisualRenderZ and math.abs(self._VisualRenderZ - hullZ) > STEP_HEIGHT * 4 then
 		self._VisualRenderZ = nil
 		self._LastGroundZ = nil
@@ -853,9 +913,9 @@ function ENT:Draw()
 	local seqName = self:GetSequenceName(self:GetSequence()) or ""
 	local isMovingSeq = seqName:lower():find("walk") or seqName:lower():find("run")
 
-	local activeFoot = isMovingSeq and (getEventContactFoot(self) or "left") or nil
-	local fwd = self:GetForward()
-	local flatForward = Vector(fwd.x, fwd.y, 0):GetNormalized()
+	local leftRule = getFootIkRule(self, "left")
+	local rightRule = getFootIkRule(self, "right")
+	local activeFoot = isMovingSeq and getRuleActiveFoot(self, leftRule, rightRule) or nil
 	local function footInfo(bone)
 		if not bone then return nil end
 		local m = self:GetBoneMatrix(bone)
@@ -878,22 +938,26 @@ function ENT:Draw()
 			footDeltaZ = footDelta.z
 		end
 	end
-	local leftPlanted = leftLocalZ and leftLocalZ < PLANTED_FOOT_Z
-	local rightPlanted = rightLocalZ and rightLocalZ < PLANTED_FOOT_Z
-
-	-- Trace from foot XY. Swinging feet get a small event-shaped forward probe so
-	-- stair-edge sampling follows footstep timing instead of snapping on plant state.
-	local function doTrace(bone, side, planted)
+	-- Trace from the IK rule ground target, using the rule floor/height/radius
+	-- parsed from the studio model.
+	local function doTrace(bone, rule)
 		if not bone then return nil end
 		local mat = self:GetBoneMatrix(bone)
 		if not mat then return nil end
-		local probeScale = (isMovingSeq and not planted) and getFootSwingProbeScale(self, side) or 0
-		local footPos = mat:GetTranslation() + flatForward * (probeScale * SWING_PROBE_SCALE)
+		local footPos = mat:GetTranslation()
+		local radius = HULL_R
+		local height = STEP_HEIGHT + 2
+		local floorZ = traceZ
+		if rule then
+			radius = math.max(rule.radius or radius, 1)
+			height = math.max(rule.height or height, 1)
+			floorZ = hullZ + (rule.floor or 0)
+		end
 		local tr = util.TraceHull({
-			start = Vector(footPos.x, footPos.y, traceZ + STEP_HEIGHT + 2),
-			endpos = Vector(footPos.x, footPos.y, traceZ - STEP_HEIGHT - 2),
-			mins = Vector(-HULL_R, -HULL_R, 0),
-			maxs = Vector(HULL_R, HULL_R, 1),
+			start = Vector(footPos.x, footPos.y, floorZ + height),
+			endpos = Vector(footPos.x, footPos.y, floorZ - height),
+			mins = Vector(-radius, -radius, 0),
+			maxs = Vector(radius, radius, radius * 2),
 			filter = self,
 			mask = MASK_SOLID
 		})
@@ -901,8 +965,18 @@ function ENT:Draw()
 		return tr.HitPos.z
 	end
 
-	local leftHit = doTrace(lFootBone, "left", leftPlanted)
-	local rightHit = doTrace(rFootBone, "right", rightPlanted)
+	local leftHit = doTrace(lFootBone, leftRule)
+	local rightHit = doTrace(rFootBone, rightRule)
+	local currentMinHit
+	local currentMaxHit
+	if leftHit then
+		currentMinHit = leftHit
+		currentMaxHit = leftHit
+	end
+	if rightHit then
+		currentMinHit = currentMinHit and math.min(currentMinHit, rightHit) or rightHit
+		currentMaxHit = currentMaxHit and math.max(currentMaxHit, rightHit) or rightHit
+	end
 	if not leftHit and not rightHit then
 		NPCDebug.PrintVisualZ(self, "V3ZDBG", {
 			activeFoot = activeFoot,
@@ -932,30 +1006,34 @@ function ENT:Draw()
 
 	-- SDK-style visual step origin: parsed rules drive a small per-foot latch
 	-- state, while traces only provide ground heights for active contact windows.
-	local leftRule = getFootIkRule(self, "left")
-	local rightRule = getFootIkRule(self, "right")
 	local activeRule = (activeFoot == "left") and leftRule or rightRule
 	local committedHeights = FootIK.GetCommittedHeights(self, {
 		activeFoot = activeFoot,
 		cycle = self:GetCycle(),
-		fallbackWindow = CONTACT_RELEASE_CYCLE,
 		leftHit = leftHit,
 		rightHit = rightHit,
 		leftRule = leftRule,
-		rightRule = rightRule,
-		leftAge = getFootContactAge(self, "left"),
-		rightAge = getFootContactAge(self, "right"),
-		leftPlanted = leftPlanted,
-		rightPlanted = rightPlanted
+		rightRule = rightRule
 	})
 	local minGroundZ, maxGroundZ = FootIK.MinMax(committedHeights)
-	minGroundZ = minGroundZ or self._LastGroundZ
 	maxGroundZ = maxGroundZ or minGroundZ
+	if currentMaxHit then
+		maxGroundZ = maxGroundZ and math.max(maxGroundZ, currentMaxHit) or currentMaxHit
+	end
+	if minGroundZ and currentMaxHit and hullRising and hullZ - minGroundZ > STEP_HEIGHT * 0.1 and currentMaxHit > minGroundZ + 1 and currentMaxHit <= hullZ + 1 then
+		-- GLua NextBot hulls step up before the IK rule switches feet. Shape the
+		-- higher-tread takeover by IK rule phase so the visual body follows the
+		-- support-leg push: slow at first, then fast as the leg straightens.
+		local push = getRulePushFraction(activeRule, self:GetCycle())
+		if push > 0 then
+			minGroundZ = Lerp(push, minGroundZ, currentMaxHit)
+		end
+	end
 
 	if minGroundZ and maxGroundZ then
 		minGroundZ = math.Clamp(minGroundZ, traceZ - STEP_HEIGHT, traceZ + STEP_HEIGHT)
 		maxGroundZ = math.Clamp(maxGroundZ, traceZ - STEP_HEIGHT, traceZ + STEP_HEIGHT)
-		self._VisualEstIkFloor = (self._VisualEstIkFloor or minGroundZ) * (1 - IK_FLOOR_BLEND) + minGroundZ * IK_FLOOR_BLEND
+		self._VisualEstIkFloor = (self._VisualEstIkFloor or hullZ) * (1 - IK_FLOOR_BLEND) + minGroundZ * IK_FLOOR_BLEND
 
 		local bias = math.Clamp((maxGroundZ - minGroundZ) - STEP_HEIGHT, 0, STEP_HEIGHT)
 		local targetOffset = math.Clamp(self._VisualEstIkFloor - hullZ, -STEP_HEIGHT + bias, 0)
@@ -996,7 +1074,20 @@ function ENT:Draw()
 		self:DrawModel()
 		self:SetRenderOrigin(nil)
 	else
-		self:DrawModel()
+		-- SDK UpdateStepOrigin decays the previous IK offset when contact is stale
+		-- instead of snapping the render origin straight back to the hull.
+		self._VisualIkOffset = (self._VisualIkOffset or 0) * 0.5
+		self._VisualEstIkFloor = hullZ
+		local renderZ = hullZ + self._VisualIkOffset
+		self._VisualRenderZ = renderZ
+		if math.abs(self._VisualIkOffset) > 0.01 then
+			self:SetRenderOrigin(Vector(hullPos.x, hullPos.y, renderZ))
+			self:SetupBones()
+			self:DrawModel()
+			self:SetRenderOrigin(nil)
+		else
+			self:DrawModel()
+		end
 	end
 end
 

@@ -4,8 +4,9 @@ CityNPCs.Modules = CityNPCs.Modules or {}
 local FootIK = CityNPCs.Modules.foot_ik or {}
 CityNPCs.Modules.foot_ik = FootIK
 
-function FootIK.IsCycleInRelease(rule, cycle)
+function FootIK.IsCycleInRelease(rule, cycle, releaseFraction)
 	if not rule then return false end
+	releaseFraction = isnumber(releaseFraction) and releaseFraction or 0.1
 	local peak = rule.peak or rule.start or 0
 	local tail = rule.tail or peak
 	local finish = rule.finish or tail
@@ -14,7 +15,7 @@ function FootIK.IsCycleInRelease(rule, cycle)
 	if cycle < peak then cycle = cycle + 1 end
 	if cycle < peak or cycle >= finish then return false end
 	if cycle <= tail then return true end
-	return ((cycle - tail) / math.max(finish - tail, 0.001)) < 0.1
+	return ((cycle - tail) / math.max(finish - tail, 0.001)) < releaseFraction
 end
 
 function FootIK.UpdateFoot(ent, side, hitZ, rule, cycle)
@@ -29,7 +30,7 @@ function FootIK.UpdateFoot(ent, side, hitZ, rule, cycle)
 
 	local active = false
 	if rule then
-		active = FootIK.IsCycleInRelease(rule, cycle)
+		active = FootIK.IsCycleInRelease(rule, cycle, ent.FootIkReleaseFraction)
 	end
 
 	if active and hitZ and not state.latched then

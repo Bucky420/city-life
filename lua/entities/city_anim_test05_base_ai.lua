@@ -116,6 +116,9 @@ function ENT:ToggleCommander(activator)
 		self:ClearCommander()
 		self.StockMoveActive = false
 		self.DefaultIdleApplied = false
+		if self.DebugEnabled then
+			self:SetDebugEnabled(activator, false)
+		end
 		activator:PrintMessage(HUD_PRINTTALK, "[v5-base_ai] Follow disabled")
 		return
 	end
@@ -256,6 +259,11 @@ local function drawTraceSquare(x, y, z, r, color)
 	render.DrawLine(Vector(x - r, y + r, z), Vector(x - r, y - r, z), color, false)
 end
 
+local function shouldDrawDeveloperDebug(ent)
+	local developer = GetConVar("developer")
+	return ent:GetNWBool("CityNPCDebugEnabled", false) and developer and developer:GetBool()
+end
+
 local function drawTraceHullLines(data, color)
 	if not data or not data.worldPos then return end
 
@@ -338,7 +346,7 @@ function ENT:Draw()
 	self:SetIK(true)
 	self:SetupBones()
 
-	if self:GetNWBool("CityNPCDebugEnabled", false) then
+	if shouldDrawDeveloperDebug(self) then
 		local leftFoot = getFootData(self, "L")
 		local rightFoot = getFootData(self, "R")
 		drawTraceHullLines(leftFoot, Color(80, 170, 255, 255))
